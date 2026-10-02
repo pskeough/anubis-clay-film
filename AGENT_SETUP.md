@@ -63,19 +63,23 @@ installing anything outside this folder. At the end, give me a report.
    VAELoader -> models/vae, LoraLoaderModelOnly -> models/loras). The file names must match
    exactly; they come from farm/config.py MODELS and the defaults of
    farm/graphs.py minimax_h3_official.
-     Stills (Qwen-Image 2.1):
-       qwen_image_2.1_int8_convrot.safetensors      diffusion model
-       qwen3vl_8b_w4a8.safetensors                  text encoder
-       qwen_image_2.1_vae_bf16.safetensors          vae
-     Motion (MiniMax H3):
-       minimax_h3_fl2va_pruned_int8_convrot.safetensors              diffusion model
-       qwen3vl32b_h3_nvfp4.safetensors                               text encoder (ComfyUI's
-         H3 template names this file qwen3vl_32b_minimax_h3_nvfp4_awq; rename it to match)
-       minimax_h3_video_vae_fp16.safetensors                         vae
-       minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors     lora
-   - Download sources are not recorded in the repository (check). Search Hugging Face and
-     ComfyUI's model documentation for these exact names, show me the source URL and size of
-     each, and wait for my approval before downloading.
+     Stills (Qwen-Image 2.1), from https://huggingface.co/Comfy-Org/Qwen-Image-2.1
+       diffusion_models/qwen_image_2.1_int8_convrot.safetensors   7.26 GB   diffusion model
+       text_encoders/qwen3vl_8b_w4a8.safetensors                  6.31 GB   text encoder
+       vae/qwen_image_2.1_vae_bf16.safetensors                    0.68 GB   vae
+     Motion (MiniMax H3), from https://huggingface.co/Comfy-Org/MiniMax-H3
+       diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors        20.97 GB  diffusion model
+       text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors               15.69 GB  text encoder
+         (save it as qwen3vl32b_h3_nvfp4.safetensors, the name the graphs load)
+       vae/minimax_h3_video_vae_fp16.safetensors                                5.21 GB   vae
+       loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors          1.96 GB   lora
+     Direct download URLs follow the pattern
+       https://huggingface.co/<repo>/resolve/main/<path above>
+     Licences: Qwen-Image 2.1 files are under the Qwen Research licence; MiniMax H3 files are
+     under the MiniMax H3 Community License Agreement. Show me both before downloading.
+   - These are the files the author's films used. Other checkpoints work if the names in
+     farm/config.py MODELS and the farm/graphs.py defaults are changed to match.
+   - Show me the total size (about 58 GB) and wait for my approval before downloading.
    - First list which of these files are already present anywhere under COMFY_ROOT\models or
      COMFY_EXTRA_MODELS.
    - farm/config.py MODELS also lists Z-Image and Qwen-Image-Edit-2509 files. The current
@@ -106,9 +110,15 @@ installing anything outside this folder. At the end, give me a report.
      Report whether it does.
 
 8. Planner model.
-   - `python -m clay_film plan` needs an OpenAI-compatible chat endpoint. The default is
-     http://127.0.0.1:8080/v1 with model "local" (tested with Qwen3-14B on llama-server).
-     Report whether anything is listening there. Do not start or download a model.
+   - `python -m clay_film plan` needs an OpenAI-compatible chat endpoint. Choose it with
+     --endpoint URL --model ID. The default is http://127.0.0.1:8080/v1 with model "local",
+     which is whatever llama-server has loaded.
+   - Tested default: Qwen3-14B on llama-server (https://huggingface.co/Qwen/Qwen3-14B-GGUF).
+   - Used for the author's films: Qwen3.8-27B Heretic-abliterated "RVN", Q4_K_M with MTP
+     head, file RVN-Q4_K_M-mtp.gguf (17.0 GB), from
+     https://huggingface.co/0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF
+     It was run across two 16 GB cards in tensor-split mode. Ask me which one I want.
+   - Report whether anything is listening on the endpoint. Do not start or download a model.
 
 9. Tests. Run each and report the output:
      python -m clay_film selftest

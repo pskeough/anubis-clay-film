@@ -146,14 +146,24 @@ Other entry points:
 
 ## Models
 
-| Stage | Model | Files (from `farm/config.py` and `farm/graphs.py`) | Licence |
-|---|---|---|---|
-| Stills | Qwen-Image 2.1, int8 ConvRot repack, Qwen3-VL 8B text encoder | `qwen_image_2.1_int8_convrot.safetensors`, `qwen3vl_8b_w4a8.safetensors`, `qwen_image_2.1_vae_bf16.safetensors` | Check the Qwen-Image 2.1 model card. |
-| Motion | MiniMax H3 image-to-video, pruned int8 ConvRot repack, Qwen3-VL 32B text encoder, turbo LoRA | `minimax_h3_fl2va_pruned_int8_convrot.safetensors`, `qwen3vl32b_h3_nvfp4.safetensors`, `minimax_h3_video_vae_fp16.safetensors`, `minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` | Check the MiniMax H3 model card and its use restrictions. |
-| Guide narration | Qwen3-TTS 1.7B, base and VoiceDesign, GGUF via audio.cpp | `qwen3-tts-12hz-1.7b-base-q8_0.gguf`, `qwen3-tts-voicedesign-q8_0.gguf` | Check the Qwen3-TTS model card. |
-| Narration engine (optional) | Kokoro-82M | downloaded by the `kokoro` package | Apache 2.0 |
-| Caption timing | faster-whisper small.en | downloaded by `faster-whisper` | MIT |
-| Planner | Any OpenAI-compatible chat model | | Depends on the model |
+These are the models used for the films made with this pipeline. Every one can be swapped: the planner is any OpenAI-compatible chat model, and the ComfyUI stages take other checkpoints if you change the file names in `farm/config.py` and the defaults in `farm/graphs.py`.
+
+| Role | Model | File | Link | Licence (from the model card) |
+|---|---|---|---|---|
+| Planner (director), as used for the author's films | Qwen3.8-27B Heretic-abliterated "RVN" (`general.name` Qwen38 Ara v5), Q4_K_M with MTP head, served by llama-server | `RVN-Q4_K_M-mtp.gguf` | [0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF](https://huggingface.co/0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF/blob/main/RVN-Q4_K_M-mtp.gguf) | Apache 2.0 |
+| Planner, tested default | Qwen3-14B on llama-server | any Qwen3-14B GGUF | [Qwen/Qwen3-14B-GGUF](https://huggingface.co/Qwen/Qwen3-14B-GGUF) | Apache 2.0 |
+| Stills: diffusion model | Qwen-Image 2.1, int8 ConvRot (ComfyUI repack) | `qwen_image_2.1_int8_convrot.safetensors` | [Comfy-Org/Qwen-Image-2.1](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/diffusion_models/qwen_image_2.1_int8_convrot.safetensors) | Qwen Research licence ([LICENSE](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE)) |
+| Stills: text encoder | Qwen3-VL 8B, w4a8 | `qwen3vl_8b_w4a8.safetensors` | [Comfy-Org/Qwen-Image-2.1](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/text_encoders/qwen3vl_8b_w4a8.safetensors) | Qwen Research licence |
+| Stills: VAE | Qwen-Image 2.1 VAE | `qwen_image_2.1_vae_bf16.safetensors` | [Comfy-Org/Qwen-Image-2.1](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/vae/qwen_image_2.1_vae_bf16.safetensors) | Qwen Research licence |
+| Motion: diffusion model | MiniMax H3 first/last-frame-to-video, pruned int8 ConvRot (ComfyUI repack) | `minimax_h3_fl2va_pruned_int8_convrot.safetensors` | [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors) | MiniMax H3 Community License Agreement ([LICENSE](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE)) |
+| Motion: text encoder | Qwen3-VL 32B for H3, NVFP4 (AWQ) | `qwen3vl32b_h3_nvfp4.safetensors` (published as `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`; rename after download) | [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors) | MiniMax H3 Community License Agreement |
+| Motion: VAE | MiniMax H3 video VAE | `minimax_h3_video_vae_fp16.safetensors` | [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/vae/minimax_h3_video_vae_fp16.safetensors) | MiniMax H3 Community License Agreement |
+| Motion: LoRA | MiniMax H3 FL2V turbo, 8 steps | `minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` | [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors) | MiniMax H3 Community License Agreement |
+| Guide narration | Qwen3-TTS 1.7B, base and VoiceDesign, GGUF via audio.cpp | `qwen3-tts-12hz-1.7b-base-q8_0.gguf`, `qwen3-tts-voicedesign-q8_0.gguf` | source not recorded | Check the Qwen3-TTS model card. |
+| Narration engine (optional) | Kokoro-82M | downloaded by the `kokoro` package | | Apache 2.0 |
+| Caption timing | faster-whisper small.en | downloaded by `faster-whisper` | | MIT |
+
+The planner is chosen on the command line: `python -m clay_film plan NAME --endpoint URL --model ID`. The defaults are `http://127.0.0.1:8080/v1` and `local`, which is whatever llama-server has loaded. The 27B above is the model used for the author's films. It needs about 17 GB for weights and was run split across two 16 GB cards. Qwen3-14B is the model the planner was tested with, and it fits one card.
 
 `farm/config.py` also lists Z-Image and Qwen-Image-Edit-2509 files used by older graphs. The current stages do not use them, but `farm/preflight.py` checks every entry in `MODELS` and reports the absent ones.
 
