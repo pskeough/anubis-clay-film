@@ -1,0 +1,13 @@
+# Core: CLI, studio, MCP server, farm client
+pillow
+numpy
+opencv-python
+psutil
+fastapi
+uvicorn
+mcp
+# Media environment (narration, assembly, voice booth). Install torch for your CUDA version first.
+imageio-ffmpeg
+faster-whisper
+kokoro
+num2words

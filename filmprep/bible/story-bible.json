@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "title": "Example story bible",
+  "_note": "Example only. clay_film reads cast.<id>.appearance for every cast entry with kind 'human'. Replace with your own cast, or put the cast in each plan's own cast block.",
+  "cast": {
+    "menote": {
+      "kind": "human",
+      "appearance": "a young man of about twenty with short dark hair, a grey crew-neck sweatshirt, dark jeans and white canvas shoes"
+    }
+  }
+}

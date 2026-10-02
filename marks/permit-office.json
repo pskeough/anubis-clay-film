@@ -1,0 +1,10 @@
+{
+  "_comment": "Seat marks for the Anubis permit office. Clerks sit behind their desks facing the camera-side wall (facing near).",
+  "clerk-desk": [-1.2, 4.75],
+  "coworker-desk": [0.3, 4.75],
+  "row2-left": [-2.7, 7.35],
+  "row2-right": [1.8, 7.35],
+  "row2-centre": [-1.2, 7.35],
+  "aisle-far": [-1.95, 10.5],
+  "aisle-mid": [1.05, 8.0]
+}

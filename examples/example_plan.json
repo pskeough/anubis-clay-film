@@ -1,0 +1,59 @@
+{
+ "title": "Lakeside, the stranger",
+ "location": "lakeside-pine-path",
+ "seed": 31337,
+ "grade": "ash",
+ "cast": {
+  "stranger": "a man in a dark hooded jacket with the hood pulled far forward, the inside of the hood a void of solid black shadow where a face would be"
+ },
+ "shots": [
+  {
+   "narration": "Another twig snapped, this time closer.",
+   "camera": {
+    "angle": "frontal",
+    "elevation": "low",
+    "distance": "full_body",
+    "lens": 35
+   },
+   "people": [],
+   "look_at": "path_mid",
+   "subject": "the empty pine path",
+   "scene": "A flagstone trail runs down through tall pines toward a grey lake.",
+   "action": "nothing moves on the trail; a few needles drift down",
+   "motion": "a very slow push forward down the path"
+  },
+  {
+   "narration": "There, in the distance, was the outline of a human.",
+   "camera": {
+    "angle": "rear",
+    "elevation": "low",
+    "distance": "medium",
+    "lens": 35,
+    "frame": "left_third"
+   },
+   "people": [
+    {
+     "who": "menote",
+     "at": "near-centre",
+     "facing": "far",
+     "pose": "kneeling",
+     "action": "kneeling on the flagstones with his back to the camera",
+     "placement": "large in the left foreground, seen from behind"
+    },
+    {
+     "who": "stranger",
+     "at": "far-centre",
+     "facing": "near",
+     "pose": "walking",
+     "action": "walking up the trail toward the camera",
+     "placement": "small and far down the path"
+    }
+   ],
+   "subject": "the kneeling young man",
+   "scene": "Over the shoulder of a young man kneeling on a forest path, a distant hooded figure walks toward him.",
+   "action": "far down the trail the hooded figure keeps walking closer",
+   "motion": "a slow push in over his shoulder",
+   "move_target": "the distant hooded figure"
+  }
+ ]
+}

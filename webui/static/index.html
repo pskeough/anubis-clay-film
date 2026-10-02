@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clay Film Studio</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <div class="brand">Clay Film Studio <span id="drybadge" class="badge warn" hidden>DRY</span></div>
+    <label class="stack">Piece
+      <select id="piecesel"></select>
+    </label>
+    <div id="pieceinfo" class="muted small"></div>
+    <nav id="tabs">
+      <button data-page="input">1 Input</button>
+      <button data-page="script">2 Script and shots</button>
+      <button data-page="stills">3 Stills</button>
+      <button data-page="motion">4 Motion</button>
+      <button data-page="assemble">5 Assemble</button>
+    </nav>
+    <section id="queue">
+      <div class="qhead"><h3>Queue</h3><span id="farm" class="small"></span></div>
+      <div id="gpublock" class="small warnbox" hidden></div>
+      <div id="qlist"></div>
+      <div class="row small"><button id="stopfarm" class="small">Stop farm</button>
+        <button id="clearjobs" class="small">Clear finished</button></div>
+    </section>
+  </aside>
+  <main id="main"></main>
+</div>
+<div id="modal" hidden></div>
+<div id="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

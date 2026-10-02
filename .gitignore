@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+node_modules/
+.env
+config.local.json
+webui/config.local.json
+# generated output
+pieces/
+runs/
+farm/_state/
+*.log
+.gpu.lock
+last_stop.txt
+# media and weights
+*.mp4
+*.wav
+*.mp3
+*.webm
+*.safetensors
+*.gguf
+*.ckpt
+*.pt
+*.bin
+models/

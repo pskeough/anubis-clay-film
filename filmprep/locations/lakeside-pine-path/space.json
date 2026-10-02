@@ -1,0 +1,982 @@
+{
+ "id": "lakeside-pine-path",
+ "_comment": "Coarse metric solid for the LOCATION CANON. Metres. x[-w/2,w/2] left..right, y[0,h] ground..top of volume, z[0,d] upslope-camera-side..lake. EXTERIOR BAY, OPEN TO SKY: the box is a bounded slice of hillside the scene happens in, not the whole wood; nothing closes the top. Geometry read off plate.png.",
+ "room": {
+  "w": 16,
+  "d": 26,
+  "h": 11
+ },
+ "props": [
+  {
+   "id": "path_near",
+   "type": "box",
+   "label": "flagstone path",
+   "pos": [
+    1.3,
+    0.07,
+    3.2
+   ],
+   "size": [
+    3.0,
+    0.14,
+    6.4
+   ],
+   "albedo": 0.6,
+   "desc": "a worn flagstone path under a thin litter of needles"
+  },
+  {
+   "id": "path_mid",
+   "type": "box",
+   "label": "flagstone path",
+   "pos": [
+    0.4,
+    0.1,
+    12.4
+   ],
+   "size": [
+    3.0,
+    0.2,
+    7.2
+   ],
+   "albedo": 0.6,
+   "desc": "a worn flagstone path under a thin litter of needles"
+  },
+  {
+   "id": "path_far",
+   "type": "box",
+   "label": "flagstone path",
+   "pos": [
+    -0.7,
+    0.13,
+    22.0
+   ],
+   "size": [
+    3.0,
+    0.26,
+    7.6
+   ],
+   "albedo": 0.6,
+   "desc": "a worn flagstone path under a thin litter of needles"
+  },
+  {
+   "id": "step_up",
+   "type": "box",
+   "label": "slab step",
+   "pos": [
+    0.8,
+    0.09,
+    9.1
+   ],
+   "size": [
+    2.7,
+    0.18,
+    1.3
+   ],
+   "albedo": 0.58,
+   "desc": "a sunk slab step across the pitch of the path"
+  },
+  {
+   "id": "step_low",
+   "type": "box",
+   "label": "slab step",
+   "pos": [
+    -0.2,
+    0.11,
+    18.6
+   ],
+   "size": [
+    2.7,
+    0.22,
+    1.3
+   ],
+   "albedo": 0.58,
+   "desc": "a sunk slab step across the pitch of the path"
+  },
+  {
+   "id": "bank_near",
+   "type": "box",
+   "label": "earthen bank",
+   "pos": [
+    -5.7,
+    0.95,
+    3.6
+   ],
+   "size": [
+    4.6,
+    1.9,
+    7.2
+   ],
+   "albedo": 0.32,
+   "desc": "a steep earthen bank against the upper wood"
+  },
+  {
+   "id": "bank_mid",
+   "type": "box",
+   "label": "earthen bank",
+   "pos": [
+    -5.9,
+    1.1,
+    12.0
+   ],
+   "size": [
+    4.2,
+    2.2,
+    7.0
+   ],
+   "albedo": 0.32,
+   "desc": "a steep earthen bank against the upper wood"
+  },
+  {
+   "id": "bank_far",
+   "type": "box",
+   "label": "earthen bank",
+   "pos": [
+    -6.0,
+    0.95,
+    21.5
+   ],
+   "size": [
+    4.0,
+    1.9,
+    7.0
+   ],
+   "albedo": 0.32,
+   "desc": "a steep earthen bank against the upper wood"
+  },
+  {
+   "id": "shoulder_near",
+   "type": "box",
+   "label": "mossy shoulder",
+   "pos": [
+    6.0,
+    0.45,
+    4.0
+   ],
+   "size": [
+    4.0,
+    0.9,
+    8.0
+   ],
+   "albedo": 0.42,
+   "desc": "a low mossy shoulder beside the stand of pines"
+  },
+  {
+   "id": "shoulder_far",
+   "type": "box",
+   "label": "mossy shoulder",
+   "pos": [
+    6.2,
+    0.4,
+    21.5
+   ],
+   "size": [
+    4.0,
+    0.8,
+    8.0
+   ],
+   "albedo": 0.42,
+   "desc": "a low mossy shoulder beside the stand of pines"
+  },
+  {
+   "id": "water",
+   "type": "box",
+   "label": "lake water",
+   "pos": [
+    2.5,
+    0.1,
+    24.7
+   ],
+   "size": [
+    11.0,
+    0.2,
+    2.6
+   ],
+   "albedo": 0.82,
+   "desc": "still pewter water past the far trunks"
+  },
+  {
+   "id": "far_shore",
+   "type": "box",
+   "label": "opposite shore",
+   "pos": [
+    2.5,
+    0.2,
+    25.7
+   ],
+   "size": [
+    11.0,
+    0.4,
+    0.6
+   ],
+   "albedo": 0.28,
+   "desc": "a low dark opposite shore across the water",
+   "_note": "2026-09-24: was 2.6 m tall; Qwen-2.1 rendered it as a stone wall at the end of the path in every frame that saw it. Now a low shore edge; mist carries the distance."
+  },
+  {
+   "id": "tL1",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    -4.9,
+    6.0,
+    2.0
+   ],
+   "size": [
+    0.65,
+    10.0,
+    0.65
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.325
+  },
+  {
+   "id": "tL2",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    -4.0,
+    6.0,
+    4.6
+   ],
+   "size": [
+    0.55,
+    10.0,
+    0.55
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.275
+  },
+  {
+   "id": "tL3",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    -5.3,
+    6.0,
+    7.4
+   ],
+   "size": [
+    0.7,
+    10.0,
+    0.7
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.35
+  },
+  {
+   "id": "tL4",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    -4.3,
+    6.0,
+    10.2
+   ],
+   "size": [
+    0.6,
+    10.0,
+    0.6
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.3
+  },
+  {
+   "id": "tL5",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    -5.1,
+    6.0,
+    13.5
+   ],
+   "size": [
+    0.68,
+    10.0,
+    0.68
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.34
+  },
+  {
+   "id": "tL6",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    -4.1,
+    6.0,
+    16.8
+   ],
+   "size": [
+    0.58,
+    10.0,
+    0.58
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.29
+  },
+  {
+   "id": "tL7",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    -5.4,
+    6.0,
+    20.0
+   ],
+   "size": [
+    0.66,
+    10.0,
+    0.66
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.33
+  },
+  {
+   "id": "tL8",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    -4.5,
+    6.0,
+    23.5
+   ],
+   "size": [
+    0.62,
+    10.0,
+    0.62
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.31
+  },
+  {
+   "id": "tR1",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    3.5,
+    5.5,
+    1.6
+   ],
+   "size": [
+    0.34,
+    11.0,
+    0.34
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.17
+  },
+  {
+   "id": "tR2",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    4.7,
+    5.5,
+    2.8
+   ],
+   "size": [
+    0.4,
+    11.0,
+    0.4
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.2
+  },
+  {
+   "id": "tR3",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    3.9,
+    5.5,
+    4.4
+   ],
+   "size": [
+    0.3,
+    11.0,
+    0.3
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.15
+  },
+  {
+   "id": "tR4",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    5.7,
+    5.5,
+    5.2
+   ],
+   "size": [
+    0.44,
+    11.0,
+    0.44
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.22
+  },
+  {
+   "id": "tR5",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    4.3,
+    5.5,
+    6.6
+   ],
+   "size": [
+    0.32,
+    11.0,
+    0.32
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.16
+  },
+  {
+   "id": "tR6",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    6.5,
+    5.5,
+    7.8
+   ],
+   "size": [
+    0.38,
+    11.0,
+    0.38
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.19
+  },
+  {
+   "id": "tR7",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    3.7,
+    5.5,
+    9.0
+   ],
+   "size": [
+    0.3,
+    11.0,
+    0.3
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.15
+  },
+  {
+   "id": "tR8",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    5.1,
+    5.5,
+    10.4
+   ],
+   "size": [
+    0.42,
+    11.0,
+    0.42
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.21
+  },
+  {
+   "id": "tR9",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    4.5,
+    5.5,
+    12.2
+   ],
+   "size": [
+    0.34,
+    11.0,
+    0.34
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.17
+  },
+  {
+   "id": "tR10",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    6.1,
+    5.5,
+    13.6
+   ],
+   "size": [
+    0.4,
+    11.0,
+    0.4
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.2
+  },
+  {
+   "id": "tR11",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    4.0,
+    5.5,
+    15.2
+   ],
+   "size": [
+    0.3,
+    11.0,
+    0.3
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.15
+  },
+  {
+   "id": "tR12",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    5.5,
+    5.5,
+    16.8
+   ],
+   "size": [
+    0.36,
+    11.0,
+    0.36
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.18
+  },
+  {
+   "id": "tR13",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    4.8,
+    5.5,
+    18.6
+   ],
+   "size": [
+    0.32,
+    11.0,
+    0.32
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.16
+  },
+  {
+   "id": "tR14",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    6.3,
+    5.5,
+    20.4
+   ],
+   "size": [
+    0.38,
+    11.0,
+    0.38
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.19
+  },
+  {
+   "id": "tR15",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    4.2,
+    5.5,
+    22.2
+   ],
+   "size": [
+    0.3,
+    11.0,
+    0.3
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.15
+  },
+  {
+   "id": "tR16",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    5.7,
+    5.5,
+    24.0
+   ],
+   "size": [
+    0.34,
+    11.0,
+    0.34
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.17
+  },
+  {
+   "id": "tF1",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    -2.3,
+    5.5,
+    24.6
+   ],
+   "size": [
+    0.52,
+    11.0,
+    0.52
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.26
+  },
+  {
+   "id": "tF2",
+   "type": "cyl",
+   "label": "pine trunk",
+   "pos": [
+    7.3,
+    5.5,
+    24.8
+   ],
+   "size": [
+    0.56,
+    11.0,
+    0.56
+   ],
+   "albedo": 0.22,
+   "desc": "a tall red-brown pine trunk against the dim sky",
+   "axis": "y",
+   "radius": 0.28
+  },
+  {
+   "id": "rocks_near",
+   "type": "stack",
+   "label": "granite boulders",
+   "pos": [
+    -3.3,
+    0.5,
+    2.6
+   ],
+   "size": [
+    1.8,
+    1.0,
+    2.2
+   ],
+   "yaw": 15,
+   "albedo": 0.5,
+   "desc": "mossy granite boulders against the bank"
+  },
+  {
+   "id": "rocks_mid",
+   "type": "stack",
+   "label": "granite boulders",
+   "pos": [
+    -3.0,
+    0.6,
+    10.8
+   ],
+   "size": [
+    2.0,
+    1.2,
+    2.4
+   ],
+   "yaw": -20,
+   "albedo": 0.5,
+   "desc": "mossy granite boulders against the bank"
+  },
+  {
+   "id": "rocks_far",
+   "type": "stack",
+   "label": "granite boulders",
+   "pos": [
+    -3.5,
+    0.5,
+    19.6
+   ],
+   "size": [
+    1.7,
+    1.0,
+    2.0
+   ],
+   "yaw": 30,
+   "albedo": 0.5,
+   "desc": "mossy granite boulders against the bank"
+  },
+  {
+   "id": "boulder_1",
+   "type": "cyl",
+   "label": "boulder",
+   "pos": [
+    -2.5,
+    0.45,
+    6.4
+   ],
+   "size": [
+    0.9,
+    0.9,
+    0.9
+   ],
+   "albedo": 0.46,
+   "desc": "a lichen-crusted boulder beside the path"
+  },
+  {
+   "id": "deadfall_1",
+   "type": "stack",
+   "label": "silvered deadfall",
+   "pos": [
+    -4.3,
+    0.4,
+    6.9
+   ],
+   "size": [
+    2.6,
+    0.8,
+    0.9
+   ],
+   "yaw": 18,
+   "albedo": 0.35,
+   "desc": "a silvered deadfall across the bank"
+  },
+  {
+   "id": "deadfall_2",
+   "type": "stack",
+   "label": "silvered deadfall",
+   "pos": [
+    3.1,
+    0.3,
+    11.9
+   ],
+   "size": [
+    2.2,
+    0.6,
+    0.8
+   ],
+   "yaw": -14,
+   "albedo": 0.35,
+   "desc": "a silvered deadfall across the bank"
+  },
+  {
+   "id": "root_plate",
+   "type": "stack",
+   "label": "lifted root plate",
+   "pos": [
+    -3.7,
+    0.7,
+    13.2
+   ],
+   "size": [
+    1.6,
+    1.4,
+    1.8
+   ],
+   "yaw": 40,
+   "albedo": 0.3,
+   "desc": "an upended root plate beside the trail"
+  },
+  {
+   "id": "stump_1",
+   "type": "cyl",
+   "label": "sawn stump",
+   "pos": [
+    -2.7,
+    0.35,
+    9.4
+   ],
+   "size": [
+    0.7,
+    0.7,
+    0.7
+   ],
+   "albedo": 0.4,
+   "desc": "a weathered sawn stump beside the path"
+  },
+  {
+   "id": "stump_2",
+   "type": "cyl",
+   "label": "sawn stump",
+   "pos": [
+    -3.1,
+    0.3,
+    18.2
+   ],
+   "size": [
+    0.6,
+    0.6,
+    0.6
+   ],
+   "albedo": 0.4,
+   "desc": "a weathered sawn stump beside the path"
+  },
+  {
+   "id": "mooring_post",
+   "type": "cyl",
+   "label": "mooring post",
+   "pos": [
+    0.9,
+    0.5,
+    23.6
+   ],
+   "size": [
+    0.22,
+    1.0,
+    0.22
+   ],
+   "albedo": 0.3,
+   "desc": "a leaning mooring post on the shingle"
+  },
+  {
+   "id": "needles_near",
+   "type": "clutter",
+   "label": "needle drift",
+   "pos": [
+    0.9,
+    0.02,
+    3.2
+   ],
+   "size": [
+    7.0,
+    0.08,
+    6.0
+   ],
+   "count": 40,
+   "albedo": 0.42,
+   "desc": "rust-brown needle drift against the kerb"
+  },
+  {
+   "id": "needles_mid",
+   "type": "clutter",
+   "label": "needle drift",
+   "pos": [
+    0.3,
+    0.02,
+    12.4
+   ],
+   "size": [
+    7.0,
+    0.08,
+    7.0
+   ],
+   "count": 44,
+   "albedo": 0.42,
+   "desc": "rust-brown needle drift against the kerb"
+  },
+  {
+   "id": "needles_far",
+   "type": "clutter",
+   "label": "needle drift",
+   "pos": [
+    -0.5,
+    0.02,
+    22.0
+   ],
+   "size": [
+    7.0,
+    0.08,
+    7.0
+   ],
+   "count": 40,
+   "albedo": 0.42,
+   "desc": "rust-brown needle drift against the kerb"
+  },
+  {
+   "id": "twig_near",
+   "type": "clutter",
+   "label": "twig litter",
+   "pos": [
+    -2.0,
+    0.03,
+    5.6
+   ],
+   "size": [
+    3.0,
+    0.1,
+    3.0
+   ],
+   "yaw": 10,
+   "count": 24,
+   "albedo": 0.38,
+   "desc": "snapped twig litter across the margin"
+  },
+  {
+   "id": "twig_mid",
+   "type": "clutter",
+   "label": "twig litter",
+   "pos": [
+    2.3,
+    0.03,
+    14.8
+   ],
+   "size": [
+    3.0,
+    0.1,
+    3.0
+   ],
+   "yaw": -12,
+   "count": 24,
+   "albedo": 0.38,
+   "desc": "snapped twig litter across the margin"
+  }
+ ],
+ "notes": "EXTERIOR BAY, OPEN TO SKY: the room box is a 16 x 26 m slice of wooded hillside; h = 11 m is empty air, no ceiling or canopy geometry is authored, and nothing closes the top of the volume. The camera side is z = 0 (upslope, just behind the standing position); the far end opens onto the lake. Read off plate.png: the flagstone trail runs down the middle on a gentle left-hand curve, three paved runs (near centred x +1.3, mid x +0.4, far x -0.7) joined by two sunk slab steps at z 9.1 and z 18.6. LEFT: a steep earthen bank rises about 2 m and carries eight heavy old pines (diameters 0.55-0.70 m, centres at y 6.0 so they grow out of the slope); its base is strewn with granite boulder clusters, a lone round boulder, a lifted root plate, two silvered deadfall logs and two sawn stumps. RIGHT: a dense even-aged stand of sixteen slim pines (0.30-0.44 m) spaced 1.2-2 m apart from z 1.6 to z 24 on a low mossy shoulder, with a second deadfall among them. FAR: the stand thins, the ground drops away, and a bright water slab with a low dark opposite-shore slab closes the view, framed by two heavier pines at x -2.3 and x 7.3; a leaning mooring post marks the margin at z 23.6, and the sight-line from the camera position threads the gap between the right-hand stand and the left framing pine straight onto the water. Depth massing measures roughly 34% near, 28% middle, 38% far - all well over the 12% floor, with the near bank, shoulder and first pines giving the foreground weight a photographer would want. 37 of 53 props are archetypes (26 columns, 6 stacks, 5 clutter); the largest plain box is the mid bank at 64.7 cubic metres, under the 68.6 cubic metre (1.5% of room volume) cap. Nothing emits light; all illumination is the overcast sky described in look.",
+ "look": "Colour photograph, a wooded lakeside trail on a dim grey morning. Red-brown pine bark rough and fissured, granite flags damp-rimmed with moss, packed earth the colour of wet umber, fallen needles rusting to cinnamon, lichen blotching the stones, spider silk beaded with moisture, everything quietly damp. Overcast white sky showing through thinning canopy: cold diffuse daylight with no direct sun, falling evenly through the pines and fading downhill, the lake beyond reading as a flat bright pewter glare, distance dissolving into pale mist, shadow pooling blue-grey beneath the dense stand, no highlight anywhere brighter than the sky itself. Available-light photograph, sharp focus throughout, fine surface detail, subdued desaturated colour, muted russets and grey-greens.",
+ "negative": "3d render, cgi, unreal engine, blender, videogame, plastic, waxy, smooth untextured surfaces, boxy geometry, hard geometric edges, flat even lighting, studio lighting, HDR, oversharpened, postcard photograph, catalogue photo, clean, tidy, manicured, sunny, saturated summer colour, empty foreground, symmetrical centered composition, illustration, painting, text, watermark, blurry, soft focus, motion blur, lens flare",
+ "openToSky": true
+}

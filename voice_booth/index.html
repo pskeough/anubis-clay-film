@@ -1,0 +1,1019 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Booth</title>
+<style>
+  :root {
+    --bg: #101317; --panel: #181c22; --panel2: #1f242c; --line: #2b313a;
+    --text: #e9e6e1; --muted: #8a93a0; --dim: #5d6570;
+    --accent: #f2b134; --accent-soft: rgba(242,177,52,.28); --rec: #e5484d; --ok: #46a758;
+    --script-size: 26px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  button, select, input { font: inherit; color: inherit; }
+  button { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+  button:hover:not(:disabled) { border-color: #3d4550; background: #262c35; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); color: #17130a; border-color: var(--accent); font-weight: 600; }
+  button.rec { background: var(--rec); border-color: var(--rec); color: #fff; font-weight: 600; }
+  button.rec.live { animation: pulse 1s infinite; }
+  button.sm { padding: 3px 8px; font-size: 12px; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(229,72,77,.25); } }
+  select, input[type=number] { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+  .app { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(360px, 1fr); gap: 14px;
+    height: 100vh; padding: 14px 16px; }
+  .left { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; padding-right: 2px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .row.spread { justify-content: space-between; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  header.top { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  header.top h1 { font-size: 16px; margin: 0 6px 0 0; letter-spacing: .02em; }
+  .stage { position: relative; background: #000; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
+  video { display: block; width: 100%; max-height: 50vh; background: #000; }
+  .overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-size: 110px; font-weight: 700; color: #fff; text-shadow: 0 4px 30px rgba(0,0,0,.8);
+    background: rgba(0,0,0,.35); pointer-events: none; text-align: center; }
+  .overlay small { font-size: 22px; font-weight: 500; max-width: 80%; line-height: 1.35; margin-top: 8px; }
+  .overlay.msg { font-size: 34px; }
+  .hold { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 14px; background: linear-gradient(transparent, rgba(0,0,0,.85));
+    font-size: 15px; pointer-events: none; }
+  .hold b { color: var(--accent); }
+  .recbadge { position: absolute; top: 10px; left: 10px; background: var(--rec); color: #fff; font-weight: 700;
+    padding: 3px 9px; border-radius: 999px; font-size: 12px; letter-spacing: .06em; }
+  .ratebadge { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,.6); color: var(--accent); font-weight: 700;
+    padding: 3px 9px; border-radius: 999px; font-size: 12px; border: 1px solid rgba(242,177,52,.5); }
+  .tc { font-variant-numeric: tabular-nums; font-size: 18px; min-width: 150px; }
+  .strip { position: relative; height: 46px; background: var(--panel2); border-radius: 6px; cursor: pointer;
+    overflow: hidden; user-select: none; }
+  .seg { position: absolute; top: 0; height: 28px; border-right: 1px solid var(--bg); }
+  .seg .lab { position: absolute; top: 2px; left: 4px; font-size: 10px; color: var(--muted); }
+  .seg.cur { background: rgba(242,177,52,.08); }
+  .speech { position: absolute; top: 16px; height: 8px; background: #3a424d; border-radius: 2px; }
+  .lane { position: absolute; top: 31px; height: 11px; border-radius: 3px; background: #2f5d3a; opacity: .55; }
+  .lane.use { background: var(--ok); opacity: 1; }
+  .lane.other { background: transparent; border: 1px dashed #56606c; opacity: .8; }
+  .ph { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); pointer-events: none; }
+  .loopband { position: absolute; top: 0; height: 28px; background: rgba(242,177,52,.15); pointer-events: none; }
+  .meter { position: relative; width: 180px; height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; border: 1px solid var(--line); }
+  .meter i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: linear-gradient(90deg, #46a758 0 70%, #f2b134 70% 90%, #e5484d 90%); }
+  .meter b { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; left: 0; }
+  .right { display: flex; flex-direction: column; min-height: 0; }
+  .scripthead { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .script { flex: 1; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 30vh 26px 55vh; font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+    font-size: var(--script-size); line-height: 1.75; scroll-behavior: smooth; }
+  .shot { border-left: 3px solid var(--line); padding: 2px 0 2px 16px; margin: 0 0 1.1em; }
+  .shot.cur { border-left-color: var(--accent); }
+  .shot.has { border-left-color: #2f5d3a; }
+  .shot.cur.has { border-left-color: var(--accent); }
+  .shot .sl { font: 12px/1.6 system-ui, sans-serif; color: var(--dim); cursor: pointer; display: block; }
+  .shot.cur .sl { color: var(--muted); }
+  .shot .sl .ok { color: var(--ok); }
+  .w { cursor: pointer; border-radius: 4px; padding: 0 .06em; transition: color .06s; }
+  .w.done { color: var(--dim); }
+  .w.now { color: #17130a; background: linear-gradient(90deg, var(--accent) calc(var(--p, 0) * 100%), var(--accent-soft) calc(var(--p, 0) * 100%)); }
+  .w.next { box-shadow: inset 0 -3px 0 var(--accent); }
+  .w.est { text-decoration: underline dotted var(--dim); text-underline-offset: 6px; }
+  .pause { display: inline-block; font: 600 .42em/1 system-ui, sans-serif; color: var(--dim); border: 1px solid var(--line);
+    border-radius: 999px; padding: .25em .5em; margin: 0 .3em; vertical-align: middle; position: relative; overflow: hidden; }
+  .pause.on { color: var(--text); border-color: var(--accent); background: linear-gradient(90deg, var(--accent-soft) calc(var(--p,0)*100%), transparent calc(var(--p,0)*100%)); }
+  .takes { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto; }
+  .take { display: flex; align-items: center; gap: 8px; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; flex-wrap: wrap; }
+  .take .rng { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .take.playing { border-color: var(--accent); }
+  .take.off { opacity: .55; }
+  .chip { font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; color: var(--muted); }
+  .chip.good { color: var(--ok); border-color: rgba(70,167,88,.45); }
+  .chip.warn { color: var(--accent); border-color: rgba(242,177,52,.45); }
+  .chip.bad { color: var(--rec); border-color: rgba(229,72,77,.45); }
+  .warn { color: var(--accent); }
+  .bad { color: var(--rec); }
+  .good { color: var(--ok); }
+  details.help { font-size: 13px; margin-top: 4px; }
+  details.help summary { cursor: pointer; color: var(--muted); }
+  details.help ol, details.help ul { margin: 6px 0 4px; padding-left: 20px; }
+  details.help li { margin: 3px 0; }
+  code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .diag { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px; margin-top: 6px; }
+  .tips { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; }
+  .tips li { margin: 3px 0; padding-left: 14px; position: relative; }
+  .tips li::before { content: "●"; position: absolute; left: 0; font-size: 9px; top: 4px; }
+  .tips li.good::before { color: var(--ok); } .tips li.warn::before { color: var(--accent); } .tips li.bad::before { color: var(--rec); }
+  .tips li { color: var(--text); }
+  .keys { font-size: 12px; color: var(--dim); }
+  .keys kbd { background: var(--panel2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; font: 11px system-ui; color: var(--muted); }
+  .status { min-height: 1.4em; }
+  .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 2px; }
+  @media (max-width: 1000px) {
+    .app { grid-template-columns: 1fr; height: auto; }
+    .right { height: 70vh; }
+    .left { overflow: visible; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="left">
+    <header class="top">
+      <h1>Voice Booth</h1>
+      <select id="piece" title="Piece"></select>
+      <span id="loadmsg" class="muted small"></span>
+    </header>
+
+    <div class="stage">
+      <video id="vid" playsinline preload="auto"></video>
+      <div id="count" class="overlay" hidden></div>
+      <div id="hold" class="hold" hidden></div>
+      <div id="recbadge" class="recbadge" hidden>● REC</div>
+      <div id="ratebadge" class="ratebadge" hidden></div>
+    </div>
+
+    <div class="strip" id="strip" title="Click to jump. Grey bars: where the AI voice speaks. Green lane: your takes (bright = used in the build, dashed = recorded at another speed)."></div>
+
+    <div class="card">
+      <div class="row spread">
+        <div class="row">
+          <button id="bStart" title="Back to start (Home)">⏮</button>
+          <button id="bPrev" title="Previous shot ([)">◀ shot</button>
+          <button id="bPlay" class="primary" title="Play / pause (Space)">▶ Play</button>
+          <button id="bNext" title="Next shot (])">shot ▶</button>
+          <button id="bLoop" title="Loop the current shot for practice (L)">⟲ Loop shot</button>
+          <span class="tc" id="tc">0:00.0 / 0:00.0</span>
+        </div>
+        <div class="row">
+          <label class="row small muted" title="Plays the picture, the guide and the script at this speed, records at it, and the build retimes the film to it. Takes only combine with takes of the same speed. ( - and = keys )">speed
+            <button id="rDown" class="sm">−</button>
+            <select id="rate"></select>
+            <button id="rUp" class="sm">+</button></label>
+          <span id="finalLen" class="small muted"></span>
+        </div>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <label class="row small" title="The AI narration, played in time with the picture (G)"><input type="checkbox" id="guideOn" checked> AI guide</label>
+        <input type="range" id="guideVol" min="0" max="1" step="0.05" value="0.8" style="width:90px" title="Guide volume">
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row spread">
+        <div class="row">
+          <button id="bMic">🎙 Enable mic</button>
+          <select id="dev" title="Input device" hidden></select>
+          <div class="meter" title="Input level. Keep peaks out of the red."><i id="lvl"></i><b id="pk"></b></div>
+          <span id="db" class="small muted" style="min-width:52px">–∞ dB</span>
+          <button id="bCheck" class="sm" title="7 seconds: 2 quiet, 5 talking. Reports level, room noise and whether the capture is clean. Saves nothing.">Mic check</button>
+        </div>
+        <button id="bRec" class="rec" title="Record / stop (R)">● Record</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="small" title="Record one shot at a time. The take stops itself at the end of the shot and the picture holds on the next one until you press R. Redo a shot by going back to it ([) and pressing R; the newest take of a shot wins."><input type="checkbox" id="step"> <b>Shot by shot</b></label>
+        <span class="sep"></span>
+        <label class="small muted" id="fromWrap">From
+          <select id="from">
+            <option value="start">the start</option>
+            <option value="shot">this shot</option>
+            <option value="head">the playhead</option>
+          </select></label>
+        <label class="small muted" title="Start the picture this early so you can feel the pace coming in. The take only replaces audio from the punch point on.">pre-roll
+          <select id="preroll"><option>0</option><option>1</option><option selected>2</option><option>3</option></select> s</label>
+        <label class="small muted" title="Seconds of count-in before the picture starts. The room tone recorded here is what the denoiser learns from, so 2 or more is best.">count-in
+          <select id="countin"><option>0</option><option>1</option><option selected>2</option><option>3</option></select></label>
+        <label class="small muted" title="Only with headphones, or the guide will bleed into your take."><input type="checkbox" id="guideRec"> guide while recording</label>
+      </div>
+      <div class="status small" id="status"></div>
+      <ul class="tips" id="report" hidden></ul>
+      <details class="help" id="help">
+        <summary>Mic not working in Brave? (opens by itself when something fails)</summary>
+        <ol>
+          <li>Use the address <code>http://127.0.0.1:7090</code> that VoiceBooth.bat opens, not a file you double-clicked. The mic only works on a local server address.</li>
+          <li>Click the icon at the left end of the address bar, then <b>Site settings</b> (or the mic entry), and set <b>Microphone: Allow</b>. Once a site has been blocked, Brave stops asking, so this is the usual fix. Reload after changing it.</li>
+          <li>Open <code>brave://settings/content/microphone</code>: pick the right default device at the top, and remove <code>127.0.0.1:7090</code> from "Not allowed to use your microphone" if it is listed.</li>
+          <li>If the device list is empty or the meter stays flat with permission granted, lower Shields for this site (lion icon, Shields off). Fingerprinting protection can hide or blank devices.</li>
+          <li>Windows: Settings → Privacy &amp; security → Microphone: "Microphone access" and "Let desktop apps access your microphone" both on.</li>
+          <li>"Device in use" means another app holds the mic exclusively (Discord, OBS, a DAW). Close it, or turn off exclusive mode in Sound settings → the mic → Advanced.</li>
+          <li>Still stuck: paste the same address into Edge or Chrome. Everything works the same and takes save to the same folder.</li>
+        </ol>
+        <div class="diag" id="diag"></div>
+      </details>
+      <details class="help">
+        <summary>Sounding better</summary>
+        <ul>
+          <li><b>Distance first.</b> A hand-width to two fists from the grille. Half the distance is 6 dB more voice over the same room. Then set the gain so your loudest words peak around −10 on the meter.</li>
+          <li><b>Talk across it, not into it.</b> Aim the mic at your chin or angle it 30° off your mouth: the pops and breath blasts go past it.</li>
+          <li><b>Room.</b> Soft things close behind you and around the mic (a duvet over a chair back works). Turn off fans; point the back of the mic at the PC.</li>
+          <li><b>Headphones on,</b> guide off while recording, or at least low.</li>
+          <li><b>Slow the piece down</b> until you can land each line with room to breathe, then record shot by shot. A relaxed read at 0.8 beats a sprint at 1.0.</li>
+          <li><b>Water, not coffee,</b> a few minutes before; mouth clicks come from a dry mouth.</li>
+          <li><b>Close heavy apps</b> while recording. A busy CPU is what makes the browser drop samples.</li>
+          <li>The build's <b>broadcast</b> polish does the rest: denoise from your count-in room tone, rumble and mud cut, presence, de-ess, gentle compression, loudness to −16 LUFS. The AI voice has all of that baked in, which is most of why it sounds bigger.</li>
+        </ul>
+      </details>
+    </div>
+
+    <div class="card">
+      <div class="row spread">
+        <b>Takes</b>
+        <div class="row">
+          <label class="small muted" title="What ▶ review plays: your take as saved, or with the polish the build will apply.">hear
+            <select id="hear"><option value="raw">as recorded</option><option value="clean">clean</option><option value="broadcast" selected>broadcast</option></select></label>
+          <label class="small muted" title="Moves your voice against the picture in review and in the build. Positive = voice earlier (use it if you sound late).">sync nudge
+            <input type="range" id="nudge" min="-200" max="200" step="5" value="0" style="width:100px"></label>
+          <span id="nudgeV" class="small muted" style="min-width:52px">0 ms</span>
+        </div>
+      </div>
+      <div class="takes" id="takes"><span class="muted small">No takes yet.</span></div>
+      <div class="row spread" style="margin-top:8px">
+        <span class="small muted">Ticked takes at this speed are laid in recording order; later takes win where they overlap.</span>
+        <div class="row">
+          <label class="small muted" title="raw: your voice as captured. clean: denoise, rumble cut, loudness. broadcast: clean plus mud cut, presence, de-ess, gentle compression.">polish
+            <select id="preset"><option value="raw">raw</option><option value="clean">clean</option><option value="broadcast" selected>broadcast</option></select></label>
+          <label class="small muted" id="motionWrap" title="How the slowed picture fills the extra frames. blend: mixes neighbours, soft and fast. repeat: holds frames, a slight judder. smooth: motion interpolation, best looking, slow to build (tens of minutes for a long piece).">frames
+            <select id="motion"><option value="blend">blend</option><option value="repeat">repeat</option><option value="smooth">smooth (slow)</option></select></label>
+          <button id="bOpen">Open folder</button>
+          <button id="bBuild" class="primary" disabled>Build voiced MP4</button>
+        </div>
+      </div>
+      <div id="builds" class="small" style="margin-top:6px"></div>
+    </div>
+
+    <div class="keys">
+      <kbd>Space</kbd> play/pause · <kbd>R</kbd> record/stop · <kbd>Esc</kbd> stop · <kbd>[</kbd> <kbd>]</kbd> shots · <kbd>L</kbd> loop shot · <kbd>G</kbd> guide · <kbd>-</kbd> <kbd>=</kbd> speed · <kbd>S</kbd> shot by shot · <kbd>Home</kbd> start · click any word to jump there
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="scripthead">
+      <span class="small muted" id="method"></span>
+      <div class="row small">
+        <label class="muted" title="Light each word this much before the AI voice says it, so your eye is ahead of your mouth.">look-ahead
+          <input type="number" id="lead" min="0" max="600" step="10" value="150" style="width:70px"> ms</label>
+        <button id="aMinus" title="Smaller text">A−</button>
+        <button id="aPlus" title="Larger text">A+</button>
+      </div>
+    </div>
+    <div class="script" id="script"></div>
+  </div>
+</div>
+
+<audio id="guide" preload="auto"></audio>
+<audio id="takeAudio" preload="auto"></audio>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const vid = $("#vid"), guide = $("#guide"), takeAudio = $("#takeAudio");
+const TAIL = 0.3;   // media seconds a shot-by-shot take keeps rolling past its shot (server lays it only where nothing else is)
+const RATES = []; for (let r = 0.5; r <= 1.2501; r += 0.05) RATES.push(+r.toFixed(2));
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("vb." + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("vb." + k, JSON.stringify(v)); } catch {} },
+};
+const S = {
+  piece: null, data: null, words: [], scenes: [], wordEls: [], pauseEls: {}, shotEls: [],
+  lastKey: "", lastLineTop: -1, loop: null, review: null, rec: null, cap: null, checking: false, rate: 1,
+  ctx: null, node: null, stream: null, sr: 0, deviceLabel: "", peakHold: 0, peakAt: 0,
+};
+
+/* ---------------- formatting ---------------- */
+const fmt = (t) => { t = Math.max(0, t || 0); const m = Math.floor(t / 60); return `${m}:${(t - m * 60).toFixed(1).padStart(4, "0")}`; };
+const status = (msg, cls = "") => { const el = $("#status"); el.className = "status small " + cls; el.textContent = msg; };
+const sameRate = (t) => Math.abs((t.rate || 1) - S.rate) < 1e-3;
+
+/* ---------------- piece loading ---------------- */
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({ error: r.statusText }));
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+async function loadPieces() {
+  if (location.protocol === "file:") {
+    document.body.innerHTML = '<div style="padding:40px;font:16px system-ui;color:#eee">Open this through <b>VoiceBooth.bat</b> (it serves the page at http://127.0.0.1:7090). The microphone and the videos do not work from a file.</div>';
+    return;
+  }
+  const list = await api("/api/pieces");
+  const sel = $("#piece");
+  sel.innerHTML = list.map((p) => `<option value="${p.name}">${p.title} · ${fmt(p.duration)}${p.takes ? " · " + p.takes + " takes" : ""}</option>`).join("");
+  const last = store.get("piece", null);
+  if (last && list.some((p) => p.name === last)) sel.value = last;
+  sel.onchange = () => loadPiece(sel.value);
+  if (list.length) loadPiece(sel.value);
+}
+
+async function loadPiece(name) {
+  if (S.rec) return;
+  stopReview(); hideHold();
+  S.piece = name; store.set("piece", name);
+  $("#loadmsg").textContent = "loading…";
+  $("#script").innerHTML = '<p class="muted" style="font:15px system-ui">Timing the AI read with whisper. The first time for a piece takes 20-60 s; after that it is cached.</p>';
+  vid.src = `/media/${encodeURIComponent(name)}/picture`;
+  guide.src = `/media/${encodeURIComponent(name)}/guide`;
+  let d;
+  try { d = await api(`/api/piece/${encodeURIComponent(name)}`); }
+  catch (e) { $("#loadmsg").textContent = "failed: " + e.message; return; }
+  if (S.piece !== name) return;
+  S.data = d; S.words = d.words; S.scenes = d.scenes;
+  $("#loadmsg").textContent = "";
+  $("#method").textContent = "timing: " + d.method + (d.words.some((w) => w.est) ? " · dotted words are estimated" : "");
+  S.loop = null; $("#bLoop").classList.remove("primary");
+  setRate(store.get("rate." + name, 1), true);
+  renderBuilds();
+}
+
+/* ---------------- speed ---------------- */
+function setRate(r, fromLoad) {
+  if (S.rec) return;
+  r = RATES.reduce((a, b) => (Math.abs(b - r) < Math.abs(a - r) ? b : a), 1);
+  S.rate = r;
+  if (S.piece) store.set("rate." + S.piece, r);
+  for (const el of [vid, guide]) { el.defaultPlaybackRate = r; el.playbackRate = r; el.preservesPitch = true; }
+  $("#rate").value = r.toFixed(2);
+  const rb = $("#ratebadge"); rb.hidden = Math.abs(r - 1) < 1e-3; rb.textContent = "×" + r.toFixed(2);
+  $("#motionWrap").hidden = Math.abs(r - 1) < 1e-3;
+  if (S.data) {
+    $("#finalLen").textContent = Math.abs(r - 1) < 1e-3 ? `film ${fmt(S.data.duration)}` : `film ${fmt(S.data.duration)} → ${fmt(S.data.duration / r)}`;
+    renderScript(); renderStrip(); renderTakes();
+    S.lastKey = ""; S.lastLineTop = -1;
+  }
+  if (!fromLoad) status(`Speed ×${r.toFixed(2)}. Takes recorded at other speeds stay, but only ×${r.toFixed(2)} takes go into a build at this speed.`);
+}
+
+/* ---------------- script ---------------- */
+function renderScript() {
+  const box = $("#script"), R = S.rate;
+  box.innerHTML = "";
+  S.wordEls = []; S.pauseEls = {}; S.shotEls = [];
+  const byScene = S.scenes.map(() => []);
+  S.words.forEach((w, i) => byScene[w.scene].push(i));
+  const covered = coveredShots();
+  S.scenes.forEach((sc, k) => {
+    const idx = byScene[k];
+    const div = document.createElement("div");
+    div.className = "shot" + (covered.has(k) ? " has" : "");
+    const t0 = idx.length ? S.words[idx[0]].t0 : sc.speech_start;
+    const t1 = idx.length ? S.words[idx[idx.length - 1]].t1 : sc.speech_end;
+    const wps = idx.length && t1 > t0 ? (R * idx.length / (t1 - t0)).toFixed(1) : "–";
+    const lab = document.createElement("span");
+    lab.className = "sl";
+    lab.innerHTML = `${sc.id} · ${fmt(t0)} · ${wps} words/s${covered.has(k) ? ' · <span class="ok">✓ recorded</span>' : ""}`;
+    lab.onclick = () => seek(Math.max(0, t0 - 0.4));
+    div.appendChild(lab);
+    idx.forEach((i, j) => {
+      const w = S.words[i];
+      if (i > 0) {
+        const gap = w.t0 - S.words[i - 1].t1;
+        if (gap >= 0.35) {
+          const p = document.createElement("span");
+          p.className = "pause"; p.textContent = (gap / R).toFixed(1) + "s";
+          p.title = "a pause in the AI read, at this speed";
+          div.appendChild(p); S.pauseEls[i] = p;
+          div.appendChild(document.createTextNode(" "));
+        }
+      }
+      const s = document.createElement("span");
+      s.className = "w" + (w.est ? " est" : "");
+      s.textContent = w.w;
+      s.onclick = () => seek(Math.max(0, w.t0 - 0.3));
+      div.appendChild(s); div.appendChild(document.createTextNode(" "));
+      S.wordEls[i] = s;
+    });
+    box.appendChild(div); S.shotEls.push(div);
+  });
+}
+
+function coveredShots() {   // shots fully inside a used take at this speed
+  const set = new Set(), used = usedIds();
+  (S.data?.takes || []).filter((t) => used.includes(t.id) && sameRate(t)).forEach((t) => {
+    const r0 = t.range_start ?? t.video_start, r1 = t.range_end ?? t.video_end;
+    S.scenes.forEach((sc, k) => { if (sc.shot_start >= r0 - 0.05 && sc.shot_end <= r1 + 0.05) set.add(k); });
+  });
+  return set;
+}
+
+function wordAt(t) { // last word with t0 <= t, or -1
+  let lo = 0, hi = S.words.length - 1, ans = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (S.words[m].t0 <= t) { ans = m; lo = m + 1; } else hi = m - 1; }
+  return ans;
+}
+function shotAt(v) {
+  let k = 0;
+  S.scenes.forEach((sc, i) => { if (v >= sc.shot_start - 1e-3) k = i; });
+  return k;
+}
+
+function updateScript(v) {
+  if (!S.words.length) return;
+  const lead = (parseFloat($("#lead").value) || 0) / 1000 * S.rate;   // look-ahead is wall-clock; the script runs on media time
+  const t = v + lead;
+  const i = wordAt(t);
+  let now = -1, next = -1;
+  if (i >= 0 && t < S.words[i].t1) now = i; else next = i + 1 < S.words.length ? i + 1 : -1;
+  const shot = shotAt(v);
+  const key = `${now}|${next}|${shot}`;
+  if (key !== S.lastKey) {
+    S.lastKey = key;
+    const doneUpTo = now >= 0 ? now - 1 : i;
+    S.wordEls.forEach((el, k) => {
+      el.classList.toggle("done", k <= doneUpTo);
+      el.classList.toggle("now", k === now);
+      el.classList.toggle("next", k === next);
+    });
+    Object.entries(S.pauseEls).forEach(([k, el]) => el.classList.toggle("on", +k === next));
+    S.shotEls.forEach((el, k) => el.classList.toggle("cur", k === shot));
+    const focus = S.wordEls[now >= 0 ? now : next >= 0 ? next : Math.max(i, 0)];
+    if (focus) {
+      const top = focus.offsetTop;
+      if (Math.abs(top - S.lastLineTop) > 4) {
+        S.lastLineTop = top;
+        const box = $("#script");
+        box.scrollTo({ top: top - box.clientHeight * 0.36, behavior: "smooth" });
+      }
+    }
+    document.querySelectorAll(".seg").forEach((el, k) => el.classList.toggle("cur", k === shot));
+  }
+  if (now >= 0) {
+    const w = S.words[now];
+    S.wordEls[now].style.setProperty("--p", Math.min(1, (t - w.t0) / Math.max(w.t1 - w.t0, 0.05)).toFixed(3));
+  } else if (next >= 0 && S.pauseEls[next]) {
+    const a = S.words[next - 1].t1, b = S.words[next].t0;
+    S.pauseEls[next].style.setProperty("--p", Math.min(1, Math.max(0, (t - a) / (b - a))).toFixed(3));
+  }
+}
+
+/* ---------------- timeline strip ---------------- */
+function renderStrip() {
+  const strip = $("#strip"), D = S.data.duration;
+  const pct = (t) => (100 * t / D) + "%";
+  let h = "";
+  S.scenes.forEach((sc) => {
+    h += `<div class="seg" style="left:${pct(sc.shot_start)};width:${pct(sc.shot_end - sc.shot_start)}"><span class="lab">${sc.id}</span></div>`;
+  });
+  let a = null, b = null;
+  S.words.forEach((w) => {
+    if (a === null) { a = w.t0; b = w.t1; return; }
+    if (w.t0 - b < 0.3) b = w.t1; else { h += `<div class="speech" style="left:${pct(a)};width:${pct(b - a)}"></div>`; a = w.t0; b = w.t1; }
+  });
+  if (a !== null) h += `<div class="speech" style="left:${pct(a)};width:${pct(b - a)}"></div>`;
+  const used = usedIds();
+  (S.data.takes || []).forEach((t) => {
+    const r0 = t.range_start ?? t.video_start, r1 = t.range_end ?? t.video_end;
+    const cls = !sameRate(t) ? "other" : used.includes(t.id) ? "use" : "";
+    h += `<div class="lane ${cls}" style="left:${pct(r0)};width:${pct(Math.max(r1 - r0, 0.05))}" title="${t.id} ×${(t.rate || 1).toFixed(2)}"></div>`;
+  });
+  h += `<div class="loopband" id="loopband" hidden></div><div class="ph" id="ph"></div>`;
+  strip.innerHTML = h;
+  strip.onclick = (e) => { const r = strip.getBoundingClientRect(); seek(D * (e.clientX - r.left) / r.width); };
+  drawLoop();
+}
+function drawLoop() {
+  const band = $("#loopband"); if (!band || !S.data) return;
+  if (!S.loop) { band.hidden = true; return; }
+  const D = S.data.duration;
+  band.hidden = false; band.style.left = (100 * S.loop[0] / D) + "%"; band.style.width = (100 * (S.loop[1] - S.loop[0]) / D) + "%";
+}
+
+/* ---------------- transport ---------------- */
+function seek(t) {
+  if (S.rec || !S.data) return;
+  stopReview(); hideHold();
+  vid.currentTime = Math.min(Math.max(0, t), S.data.duration - 0.05);
+}
+function togglePlay() {
+  if (S.rec || !S.data) return;
+  hideHold();
+  if (vid.paused) { vid.play().catch(() => {}); } else { vid.pause(); }
+}
+function jumpShot(dir) {
+  if (!S.scenes.length) return;
+  const k = shotAt(vid.currentTime + (dir < 0 && vid.currentTime - S.scenes[shotAt(vid.currentTime)].shot_start < 0.8 ? -1 : 0));
+  const target = Math.min(Math.max(dir < 0 ? k : k + 1, 0), S.scenes.length - 1);
+  seek(S.scenes[target].shot_start);
+  if ($("#step").checked) showHold(target);
+}
+function toggleLoop() {
+  if (S.rec || !S.scenes.length) return;
+  if (S.loop) { S.loop = null; } else {
+    const sc = S.scenes[shotAt(vid.currentTime)];
+    S.loop = [sc.shot_start, sc.shot_end];
+    if (vid.currentTime < S.loop[0] || vid.currentTime >= S.loop[1]) vid.currentTime = S.loop[0];
+  }
+  $("#bLoop").classList.toggle("primary", !!S.loop);
+  drawLoop();
+}
+vid.addEventListener("play", () => { $("#bPlay").textContent = "❚❚ Pause"; });
+vid.addEventListener("pause", () => { $("#bPlay").textContent = "▶ Play"; });
+vid.addEventListener("click", togglePlay);
+vid.addEventListener("ended", () => { if (S.rec) setTimeout(stopRecording, 400); });
+
+function showHold(k) {
+  const sc = S.scenes[k]; if (!sc) return;
+  const words = S.words.filter((w) => w.scene === k);
+  const n = words.length, secs = n ? (words[n - 1].t1 - words[0].t0) / S.rate : 0;
+  $("#hold").innerHTML = `<b>${sc.id}</b> · ${n} words in ${secs.toFixed(1)} s at ×${S.rate.toFixed(2)} · read it through, then <b>R</b> to record this shot`;
+  $("#hold").hidden = false;
+}
+function hideHold() { $("#hold").hidden = true; }
+
+/* ---------------- followers: guide and take review stay locked to the picture ---------------- */
+function follow(el, want, active) {
+  if (active && !vid.paused && want >= 0 && want < (el.duration || 1e9)) {
+    if (el.paused) { el.currentTime = want; el.play().catch(() => {}); }
+    else if (Math.abs(el.currentTime - want) > 0.08) el.currentTime = want;
+  } else if (!el.paused) el.pause();
+}
+function nudge() { return (parseFloat($("#nudge").value) || 0) / 1000; }
+function srcTime(t, v) {   // seconds into the take's WAV that belong under media time v
+  const R = t.rate || 1;
+  const segs = t.segs && t.segs.length ? t.segs : [[t.video_start, t.video_end, t.lead_in - t.video_start / R, 0]];
+  let s = segs[0];
+  for (const g of segs) if (v >= g[0]) s = g;
+  return v / R + s[2] + s[3] * v;
+}
+
+function tick() {
+  const v = vid.currentTime;
+  if (S.data) {
+    $("#tc").textContent = `${fmt(v)} / ${fmt(S.data.duration)}`;
+    const ph = $("#ph"); if (ph) ph.style.left = (100 * v / S.data.duration) + "%";
+    updateScript(v);
+    if (S.loop && !S.rec && !S.review && v >= S.loop[1]) vid.currentTime = S.loop[0];
+    const guideActive = $("#guideOn").checked && !S.review && (!S.rec || $("#guideRec").checked);
+    guide.volume = parseFloat($("#guideVol").value);
+    follow(guide, v, guideActive);
+    if (S.review) {
+      const t = S.review;
+      if (v >= (t.range_end ?? t.video_end) + 0.3 || v >= t.video_end) { vid.pause(); stopReview(); }
+      else follow(takeAudio, srcTime(t, v) + nudge(), true);
+    }
+    const rec = S.rec;
+    if (rec && rec.started && !vid.requestVideoFrameCallback && !vid.paused) rec.map.push([S.ctx.currentTime * S.sr, v]);
+    if (rec && rec.stopAt !== null && rec.frameAtStart !== null && v >= rec.stopAt) stopRecording();
+  }
+  const now = performance.now();
+  if (now - S.peakAt > 1500) S.peakHold *= 0.97;
+  requestAnimationFrame(tick);
+}
+
+/* ---------------- mic ---------------- */
+async function diag(err) {
+  const rows = [["Page address", location.origin + (window.isSecureContext ? "  (secure context: yes)" : "  (secure context: NO)")]];
+  try { const p = await navigator.permissions.query({ name: "microphone" }); rows.push(["Mic permission", p.state]); } catch { rows.push(["Mic permission", "unknown"]); }
+  try {
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput");
+    rows.push(["Input devices", devs.length ? devs.map((d) => d.label || "(unnamed: permission not granted yet)").join(" · ") : "none visible"]);
+  } catch (e) { rows.push(["Input devices", "cannot list: " + e.name]); }
+  if (S.ctx) rows.push(["Sample rate", S.ctx.sampleRate + " Hz, input " + (S.deviceLabel || "?")]);
+  rows.push(["Clean capture path", recMime() || "not available (drops get repaired instead)"]);
+  if (err) rows.push(["Last error", `${err.name}: ${err.message}`]);
+  $("#diag").innerHTML = rows.map(([k, v]) => `<span class="muted">${k}</span><span>${v}</span>`).join("");
+}
+
+function micError(e) {
+  const why = {
+    NotAllowedError: "The browser blocked the mic for this page. In Brave: the icon left of the address, Site settings, Microphone: Allow, then reload.",
+    SecurityError: "The browser will not open the mic here. Use http://127.0.0.1:7090 from VoiceBooth.bat.",
+    NotFoundError: "No microphone found. Check it is plugged in, and that Brave Shields are not hiding devices.",
+    NotReadableError: "The mic is in use by another app or Windows blocked it (Privacy settings, or exclusive mode in another app).",
+    OverconstrainedError: "The selected device refused the settings. Pick another device or the default.",
+  }[e.name] || `${e.name}: ${e.message}`;
+  status("Mic failed: " + why, "bad");
+  $("#help").open = true;
+  diag(e);
+}
+
+async function enableMic(deviceId) {
+  if (!window.isSecureContext || !navigator.mediaDevices) { micError({ name: "SecurityError", message: "not a secure context" }); return false; }
+  try {
+    if (!S.ctx) {
+      S.ctx = new AudioContext({ latencyHint: "interactive" });
+      await S.ctx.audioWorklet.addModule("/recorder-worklet.js");
+    }
+    if (S.ctx.state === "suspended") await S.ctx.resume();
+    if (S.stream) S.stream.getTracks().forEach((t) => t.stop());
+    const want = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 };
+    if (deviceId) want.deviceId = { exact: deviceId };
+    try { S.stream = await navigator.mediaDevices.getUserMedia({ audio: want }); }
+    catch (e) {
+      if (e.name !== "OverconstrainedError" && e.name !== "TypeError") throw e;
+      S.stream = await navigator.mediaDevices.getUserMedia({ audio: deviceId ? { deviceId: { exact: deviceId } } : true });
+    }
+    const track = S.stream.getAudioTracks()[0];
+    S.deviceLabel = track.label;
+    track.onended = () => { status("The mic disconnected. Click Enable mic again.", "bad"); S.stream = null; $("#bMic").hidden = false; };
+    if (S.src) S.src.disconnect();
+    S.src = S.ctx.createMediaStreamSource(S.stream);
+    if (!S.node) {
+      S.node = new AudioWorkletNode(S.ctx, "capture", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+      const mute = S.ctx.createGain(); mute.gain.value = 0;
+      S.node.connect(mute).connect(S.ctx.destination);   // pulled by the graph, nothing audible
+      S.node.port.onmessage = onWorklet;
+    }
+    S.src.connect(S.node);
+    S.sr = S.ctx.sampleRate;
+    await fillDevices(track);
+    $("#bMic").hidden = true;
+    status(`Mic on: ${S.deviceLabel || "default input"} at ${S.sr} Hz${recMime() ? ", clean capture on" : ""}. Try Mic check once before a long take.`, "good");
+    store.set("device", track.getSettings().deviceId || "");
+    diag();
+    return true;
+  } catch (e) { micError(e); return false; }
+}
+
+async function fillDevices(track) {
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput");
+  const sel = $("#dev");
+  const cur = track.getSettings().deviceId;
+  sel.innerHTML = devs.map((d, i) => `<option value="${d.deviceId}">${d.label || "input " + (i + 1)}</option>`).join("");
+  if (cur) sel.value = cur;
+  sel.hidden = devs.length < 2;
+  sel.onchange = () => { if (!S.rec && !S.checking) enableMic(sel.value); };
+}
+
+function onWorklet(e) {
+  const m = e.data;
+  if (m.level !== undefined) {
+    const db = m.level > 0 ? 20 * Math.log10(m.level) : -Infinity;
+    const x = Math.max(0, Math.min(1, (db + 60) / 60));
+    $("#lvl").style.width = (x * 100) + "%";
+    if (x >= S.peakHold) { S.peakHold = x; S.peakAt = performance.now(); }
+    $("#pk").style.left = `calc(${S.peakHold * 100}% - 2px)`;
+    $("#db").textContent = isFinite(db) ? db.toFixed(0) + " dB" : "–∞ dB";
+    $("#db").className = "small " + (db > -1 ? "bad" : "muted");
+    if (S.cap && m.level > S.cap.peak) S.cap.peak = m.level;
+    return;
+  }
+  const cap = S.cap; if (!cap) return;
+  if (m.pcm) { if (cap.firstFrame === null) cap.firstFrame = m.frame; cap.chunks.push(m.pcm); }
+  if (m.done) cap.resolveWorklet();
+}
+
+/* ---------------- capture: worklet (sync clock) + MediaRecorder (clean audio) ---------------- */
+function recMime() {
+  if (!window.MediaRecorder) return null;
+  for (const m of ["audio/webm;codecs=pcm", "audio/webm;codecs=opus", "audio/webm"]) { try { if (MediaRecorder.isTypeSupported(m)) return m; } catch {} }
+  return null;
+}
+function captureStart() {
+  const cap = { chunks: [], firstFrame: null, peak: 0, mr: null, parts: [], mime: recMime() };
+  cap.workletDone = new Promise((r) => { cap.resolveWorklet = r; });
+  S.cap = cap;
+  S.node.port.postMessage("start");
+  if (cap.mime) {
+    try {
+      cap.mr = new MediaRecorder(S.stream, { mimeType: cap.mime, audioBitsPerSecond: 320000 });
+      cap.mr.ondataavailable = (e) => { if (e.data && e.data.size) cap.parts.push(e.data); };
+      cap.mr.start(1000);
+    } catch (e) { cap.mr = null; }
+  }
+  return cap;
+}
+async function captureStop(cap) {
+  S.node.port.postMessage("stop");
+  const mrDone = cap.mr && cap.mr.state !== "inactive" ? new Promise((r) => { cap.mr.onstop = r; cap.mr.stop(); }) : Promise.resolve();
+  await Promise.race([Promise.all([cap.workletDone, mrDone]), new Promise((r) => setTimeout(r, 4000))]);
+  if (S.cap === cap) S.cap = null;
+  const w = wav16(cap.chunks, S.sr);
+  return { wav: w.blob, samples: w.samples, rec: cap.mr && cap.parts.length ? new Blob(cap.parts, { type: cap.mime }) : null };
+}
+function pack(wav, rec, map) {
+  const mapBytes = map ? new TextEncoder().encode(JSON.stringify(map)) : new Uint8Array(0);
+  return { body: new Blob([wav, rec || new Blob([]), mapBytes]), parts: `${wav.size},${rec ? rec.size : 0},${mapBytes.length}` };
+}
+
+function wav16(chunks, sr) {
+  const n = chunks.reduce((a, c) => a + c.length, 0);
+  const buf = new ArrayBuffer(44 + n * 2), d = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) d.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); d.setUint32(4, 36 + n * 2, true); str(8, "WAVE"); str(12, "fmt "); d.setUint32(16, 16, true);
+  d.setUint16(20, 1, true); d.setUint16(22, 1, true); d.setUint32(24, sr, true); d.setUint32(28, sr * 2, true);
+  d.setUint16(32, 2, true); d.setUint16(34, 16, true); str(36, "data"); d.setUint32(40, n * 2, true);
+  let o = 44;
+  for (const c of chunks) for (let i = 0; i < c.length; i++, o += 2) d.setInt16(o, Math.max(-1, Math.min(1, c[i])) * 32767, true);
+  return { blob: new Blob([buf], { type: "audio/wav" }), samples: n };
+}
+
+/* ---------------- mic check ---------------- */
+async function micCheck() {
+  if (S.rec || S.checking) return;
+  if (!S.stream && !(await enableMic(store.get("device", "") || undefined))) return;
+  if (S.ctx.state === "suspended") await S.ctx.resume();
+  vid.pause(); stopReview(); hideHold();
+  S.checking = true; $("#bCheck").disabled = true; $("#bRec").disabled = true;
+  const ov = $("#count"); ov.className = "overlay msg"; ov.hidden = false;
+  const cap = captureStart();
+  const QUIET = 2.0, TALK = 5.0;
+  const t0 = performance.now();
+  await new Promise((res) => {
+    const step = () => {
+      const e = (performance.now() - t0) / 1000;
+      if (e < QUIET) ov.innerHTML = `Stay quiet<small>measuring the room · ${Math.ceil(QUIET - e)}</small>`;
+      else if (e < QUIET + TALK) ov.innerHTML = `Talk now<small>read a line at your normal narration level, include your loudest word · ${Math.ceil(QUIET + TALK - e)}</small>`;
+      else return res();
+      setTimeout(step, 100);
+    };
+    step();
+  });
+  ov.innerHTML = "Checking…";
+  const got = await captureStop(cap);
+  try {
+    const { body, parts } = pack(got.wav, got.rec, null);
+    const r = await api(`/api/miccheck?quiet=${QUIET}&parts=${parts}`, { method: "POST", body });
+    showReport(r.tips);
+    status(`Mic check: peak ${r.peak_db} dBFS · speech ${r.speech_db} dBFS · room ${r.noise_db} dBFS${r.noise_after_db !== undefined ? ` (→ ${r.noise_after_db} after denoise)` : ""}.`, "muted");
+  } catch (e) { status("Mic check failed: " + e.message, "bad"); }
+  ov.hidden = true; ov.className = "overlay";
+  S.checking = false; $("#bCheck").disabled = false; $("#bRec").disabled = false;
+}
+function showReport(tips) {
+  const ul = $("#report");
+  if (!tips || !tips.length) { ul.hidden = true; return; }
+  ul.innerHTML = tips.map(([c, t]) => `<li class="${c}"></li>`).join("");
+  [...ul.children].forEach((li, i) => { li.textContent = tips[i][1]; });
+  ul.hidden = false;
+}
+
+/* ---------------- recording ---------------- */
+async function startRecording() {
+  if (S.rec || S.checking || !S.data) return;
+  if (!S.stream && !(await enableMic(store.get("device", "") || undefined))) return;
+  if (S.ctx.state === "suspended") await S.ctx.resume();
+  stopReview(); hideHold();
+  const step = $("#step").checked;
+  const from = step ? "shot" : $("#from").value;
+  const k = shotAt(vid.currentTime + 1e-3);
+  const punch = from === "start" ? 0 : from === "shot" ? S.scenes[k].shot_start : vid.currentTime;
+  const pre = punch > 0 ? parseFloat($("#preroll").value) : 0;
+  const startAt = Math.max(0, punch - pre);
+  vid.pause();
+  S.loop = null; $("#bLoop").classList.remove("primary"); drawLoop();
+  await new Promise((res) => { if (Math.abs(vid.currentTime - startAt) < 0.01) return res(); vid.addEventListener("seeked", res, { once: true }); vid.currentTime = startAt; });
+  vid.playbackRate = S.rate;
+  const rec = {
+    cap: null, rangeStart: punch, rangeEnd: step ? S.scenes[k].shot_end : null, shot: step ? S.scenes[k].id : null, shotIdx: k,
+    stopAt: step ? Math.min(S.scenes[k].shot_end + TAIL, S.data.duration) : null, step,
+    videoStart: null, frameAtStart: null, sync: "", map: [], cancelled: false, started: false, rate: S.rate,
+  };
+  S.rec = rec;
+  rec.cap = captureStart();
+  setRecUI(true);
+  status(step ? `Recording ${rec.shot} (${fmt(punch)}–${fmt(rec.rangeEnd)}) at ×${S.rate.toFixed(2)}. It stops itself at the end of the shot.`
+    : punch > 0 ? `Punch-in at ${fmt(punch)}${pre ? `, picture rolls from ${fmt(startAt)}` : ""}. Your take replaces audio from ${fmt(punch)} on.` : `Recording from the top at ×${S.rate.toFixed(2)}.`, "warn");
+  const ov = $("#count");
+  const n = parseInt($("#countin").value, 10);
+  for (let c = n; c >= 1; c--) {
+    if (S.rec !== rec || rec.cancelled) return;
+    ov.hidden = false; ov.textContent = String(c);
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  ov.hidden = true;
+  if (S.rec !== rec || rec.cancelled) return;
+  const onFrame = (now, meta) => {
+    if (S.rec !== rec) return;
+    // each frame on screen, placed on the audio clock
+    const f = (S.ctx.currentTime + (meta.expectedDisplayTime - performance.now()) / 1000) * S.sr;
+    if (rec.frameAtStart === null) { rec.frameAtStart = f; rec.videoStart = meta.mediaTime; rec.sync = "video-frame"; }
+    rec.map.push([f, meta.mediaTime]);
+    vid.requestVideoFrameCallback(onFrame);
+  };
+  if (vid.requestVideoFrameCallback) vid.requestVideoFrameCallback(onFrame);
+  else vid.addEventListener("playing", () => { rec.frameAtStart = S.ctx.currentTime * S.sr; rec.videoStart = vid.currentTime; rec.sync = "playing-event"; }, { once: true });
+  rec.started = true;
+  vid.play().catch((e) => { status("Could not start the picture: " + e.message, "bad"); stopRecording(); });
+}
+
+function stopRecording() {
+  const rec = S.rec;
+  if (!rec || rec.stopping) return;
+  rec.stopping = true;
+  if (rec.frameAtStart === null) rec.cancelled = true;
+  $("#count").hidden = true;
+  vid.pause();
+  finishTake(rec);
+}
+
+function setRecUI(on) {
+  $("#bRec").textContent = on ? "■ Stop" : "● Record";
+  $("#bRec").classList.toggle("live", on);
+  $("#recbadge").hidden = !on;
+  ["#bStart", "#bPrev", "#bNext", "#bPlay", "#bLoop", "#piece", "#from", "#preroll", "#countin", "#dev", "#bBuild", "#rate", "#rDown", "#rUp", "#step", "#bCheck"].forEach((s) => { $(s).disabled = on; });
+  if (!on) updateBuildButton();
+}
+
+async function finishTake(rec) {
+  const got = await captureStop(rec.cap);
+  S.rec = null;
+  setRecUI(false);
+  const cap = rec.cap;
+  if (rec.cancelled || rec.frameAtStart === null || cap.firstFrame === null) { status("Take cancelled before the picture started; nothing saved.", "muted"); return; }
+  const leadIn = (rec.frameAtStart - cap.firstFrame) / S.sr;
+  let map = rec.map.map(([f, m]) => [+((f - cap.firstFrame) / S.sr).toFixed(5), +m.toFixed(5)]);
+  if (map.length > 8000) { const k = Math.ceil(map.length / 8000); map = map.filter((_, i) => i % k === 0 || i === map.length - 1); }
+  const lastMedia = map.length ? map[map.length - 1][1] + 1 / 24 : rec.videoStart + (got.samples / S.sr - leadIn) * rec.rate;
+  const videoEnd = Math.min(S.data.duration, lastMedia);
+  const r1 = rec.rangeEnd !== null ? Math.min(rec.rangeEnd, videoEnd) : videoEnd;
+  if (r1 - Math.max(rec.rangeStart, rec.videoStart) < 0.5) { status("Take too short to keep.", "muted"); return; }
+  const q = new URLSearchParams({ video_start: rec.videoStart.toFixed(4), video_end: videoEnd.toFixed(4), lead_in: leadIn.toFixed(4),
+    range_start: Math.max(rec.rangeStart, rec.videoStart).toFixed(4), rate: rec.rate.toFixed(2), device: S.deviceLabel, sync: rec.sync });
+  if (rec.rangeEnd !== null) { q.set("range_end", r1.toFixed(4)); q.set("shot", rec.shot); }
+  const { body, parts } = pack(got.wav, got.rec, map);
+  q.set("parts", parts);
+  status("Saving take and cleaning the audio…");
+  try {
+    const meta = await api(`/api/take/${encodeURIComponent(S.piece)}?${q}`, { method: "POST", body });
+    S.data.takes.push(meta);
+    const used = usedIds(); used.push(meta.id); setUsed(used);
+    renderTakes(); renderStrip(); renderScript(); S.lastKey = ""; S.lastLineTop = -1;
+    const worst = (meta.tips || []).find(([c]) => c === "bad") || (meta.tips || []).find(([c]) => c === "warn");
+    if (rec.step) {
+      const nk = rec.shotIdx + 1;
+      if (nk < S.scenes.length) {
+        vid.currentTime = S.scenes[nk].shot_start;
+        showHold(nk);
+        status(`${rec.shot} saved. Holding on ${S.scenes[nk].id}: read it, then R. To redo ${rec.shot}, press [ then R.` + (worst ? " " + worst[1] : ""), worst ? worst[0] : "good");
+      } else status(`${rec.shot} saved. That was the last shot; build when ready.` + (worst ? " " + worst[1] : ""), worst ? worst[0] : "good");
+    } else {
+      status(`Saved ${meta.id} (${fmt(meta.range_start)}–${fmt(meta.video_end)}, ${meta.capture}). Press ▶ review to check sync.` + (worst ? " " + worst[1] : ""), worst ? worst[0] : "good");
+    }
+    if (worst) showReport(meta.tips); else $("#report").hidden = true;
+  } catch (e) { status("Saving failed: " + e.message + ". The take is still in memory only until you reload.", "bad"); }
+}
+
+/* ---------------- takes ---------------- */
+const usedKey = () => "used." + S.piece;
+function usedIds() { const all = (S.data?.takes || []).map((t) => t.id); return store.get(usedKey(), all).filter((id) => all.includes(id)); }
+function buildIds() { const ok = new Set((S.data?.takes || []).filter(sameRate).map((t) => t.id)); return usedIds().filter((id) => ok.has(id)); }
+function setUsed(ids) { store.set(usedKey(), ids); updateBuildButton(); }
+function updateBuildButton() {
+  const n = buildIds().length;
+  $("#bBuild").disabled = n === 0 || !!S.rec;
+  $("#bBuild").textContent = n ? `Build at ×${S.rate.toFixed(2)} (${n} take${n > 1 ? "s" : ""})` : "Build voiced MP4";
+}
+
+function captureChip(t) {
+  if (t.capture === "recorder") return `<span class="chip good" title="Recorder copy, aligned to the sync clock (drift ${t.recorder?.drift_ppm ?? "?"} ppm, fit ${t.recorder?.fit_ms ?? "?"} ms). The live path dropped ${t.worklet_drops} times.">clean capture</span>`;
+  if (t.capture) return `<span class="chip warn" title="${(t.recorder?.why || "no recorder copy")}">${t.worklet_drops} drops repaired</span>`;
+  return `<span class="chip warn" title="Recorded before the clean capture path. Its dropped-sample clicks are repaired in review and in the build.">old take · repaired</span>`;
+}
+
+function renderTakes() {
+  const box = $("#takes"), takes = S.data.takes || [];
+  if (!takes.length) { box.innerHTML = '<span class="muted small">No takes yet. Enable the mic, run Mic check, pick where to start, press Record.</span>'; setUsed([]); return; }
+  const used = usedIds();
+  box.innerHTML = "";
+  takes.slice().reverse().forEach((t) => {
+    const r0 = t.range_start ?? t.video_start, r1 = t.range_end ?? t.video_end;
+    const ok = sameRate(t);
+    const row = document.createElement("div");
+    row.className = "take" + (ok ? "" : " off"); row.dataset.id = t.id;
+    const pk = t.peak_db > -0.5 ? `<span class="chip bad">clipped</span>` : t.speech_db !== undefined && t.speech_db < -32 ? `<span class="chip warn" title="speech level ${t.speech_db} dBFS">quiet</span>` : "";
+    row.innerHTML = `<input type="checkbox" ${used.includes(t.id) ? "checked" : ""} ${ok ? "" : "disabled"} title="${ok ? "Use in the build" : `Recorded at ×${(t.rate || 1).toFixed(2)}; set speed to that to use it`}">
+      <span class="rng">${t.shot ? t.shot + " · " : ""}${fmt(r0)}–${fmt(r1)}</span>
+      <span class="chip ${ok ? "" : "warn"}">×${(t.rate || 1).toFixed(2)}</span>
+      ${captureChip(t)} ${pk}
+      <span class="small muted">${t.created.slice(11, 16)}</span>
+      <span style="flex:1"></span>
+      <button data-a="play" class="sm">▶ review</button><button data-a="del" class="sm" title="Moves it to voice/_discarded">discard</button>`;
+    row.querySelector("input").onchange = (e) => {
+      const ids = usedIds().filter((x) => x !== t.id);
+      if (e.target.checked) ids.push(t.id);
+      const order = takes.map((x) => x.id);
+      setUsed(ids.sort((a, b) => order.indexOf(a) - order.indexOf(b))); renderStrip(); renderScript(); S.lastKey = ""; S.lastLineTop = -1;
+    };
+    row.querySelector('[data-a="play"]').onclick = () => reviewTake(t);
+    row.querySelector('[data-a="del"]').onclick = async () => {
+      const btn = row.querySelector('[data-a="del"]');
+      if (row.dataset.confirm !== "1") { row.dataset.confirm = "1"; btn.textContent = "sure?"; setTimeout(() => { if (row.isConnected) { row.dataset.confirm = ""; btn.textContent = "discard"; } }, 2500); return; }
+      await api(`/api/discard/${encodeURIComponent(S.piece)}`, { method: "POST", body: JSON.stringify({ id: t.id }) });
+      S.data.takes = S.data.takes.filter((x) => x.id !== t.id);
+      renderTakes(); renderStrip(); renderScript(); S.lastKey = ""; S.lastLineTop = -1;
+    };
+    box.appendChild(row);
+  });
+  setUsed(used);
+}
+
+function reviewTake(t) {
+  if (S.rec || S.checking) return;
+  if (S.review && S.review.id === t.id) { vid.pause(); stopReview(); return; }
+  stopReview(); hideHold();
+  S.loop = null; $("#bLoop").classList.remove("primary"); drawLoop();
+  S.review = t;
+  const hear = $("#hear").value;
+  takeAudio.src = `/media/${encodeURIComponent(S.piece)}/take/${t.id}?preset=${hear}`;
+  document.querySelectorAll(".take").forEach((el) => el.classList.toggle("playing", el.dataset.id === t.id));
+  const r0 = t.range_start ?? t.video_start;
+  const start = Math.max(t.video_start, r0 - 1);
+  vid.pause();
+  vid.playbackRate = t.rate || 1;
+  takeAudio.addEventListener("canplay", () => { if (S.review !== t) return; vid.currentTime = start; vid.play().catch(() => {}); status(`Reviewing ${t.id} (${hear}) at ×${(t.rate || 1).toFixed(2)}, AI guide muted. Nudge the sync if you sound early or late.`); }, { once: true });
+  takeAudio.load();
+  status(hear === "raw" ? `Loading ${t.id}…` : `Preparing the ${hear} version of ${t.id} (the first time takes up to a minute)…`);
+}
+function stopReview() {
+  if (!S.review) return;
+  S.review = null; takeAudio.pause();
+  vid.playbackRate = S.rate;
+  document.querySelectorAll(".take").forEach((el) => el.classList.remove("playing"));
+}
+
+async function buildMp4() {
+  const ids = buildIds(); if (!ids.length) return;
+  const slow = Math.abs(S.rate - 1) > 1e-3;
+  $("#bBuild").disabled = true;
+  status(`Building at ×${S.rate.toFixed(2)}: laying ${ids.length} take(s), ${$("#preset").value} polish${slow ? `, retiming the picture (${$("#motion").value}); the picture re-encode takes a few minutes` : ""}…`);
+  const t0 = performance.now();
+  try {
+    const r = await api(`/api/build/${encodeURIComponent(S.piece)}`, { method: "POST", body: JSON.stringify({
+      ids, nudge_ms: parseFloat($("#nudge").value) || 0, rate: S.rate, preset: $("#preset").value, motion: $("#motion").value }) });
+    S.data.builds.unshift(r.mp4); renderBuilds();
+    status(`Built ${r.mp4} in ${Math.round((performance.now() - t0) / 1000)} s: ${fmt(r.duration)} long, voice peak ${r.voice.peak_db} dBFS${r.skipped.length ? `, ${r.skipped.length} ticked take(s) at other speeds left out` : ""}.`, "good");
+  } catch (e) { status("Build failed: " + e.message, "bad"); }
+  updateBuildButton();
+}
+function renderBuilds() {
+  const b = S.data.builds || [];
+  $("#builds").innerHTML = b.length ? "Builds: " + b.slice(0, 5).map((f) => `<a href="/media/${encodeURIComponent(S.piece)}/voice/${f}" target="_blank" style="color:var(--accent)">${f}</a>`
+    + ` <button class="capBtn" data-mp4="${f}" title="Transcribe your voice in this build, time captions to it, and export a copy with bold captions burned in (plus an .srt).">+ captions</button>`).join(" · ") : "";
+  document.querySelectorAll(".capBtn").forEach((el) => { el.onclick = () => captionBuild(el.dataset.mp4, el); });
+}
+async function captionBuild(mp4, btn) {
+  btn.disabled = true;
+  status(`Captioning ${mp4}: transcribing your voice, then burning in captions. A few minutes on CPU…`);
+  const t0 = performance.now();
+  try {
+    const r = await api(`/api/captions/${encodeURIComponent(S.piece)}`, { method: "POST", body: JSON.stringify({ mp4 }) });
+    const u = (f) => `/media/${encodeURIComponent(S.piece)}/voice/${f}`;
+    $("#builds").insertAdjacentHTML("beforeend", `<div>Captioned: <a href="${u(r.mp4)}" target="_blank" style="color:var(--accent)">${r.mp4}</a> · <a href="${u(r.srt)}" target="_blank" style="color:var(--accent)">${r.srt}</a></div>`);
+    status(`Captioned in ${Math.round((performance.now() - t0) / 1000)} s: ${r.cues} captions from ${r.words} words. Saved next to the build.`, "good");
+  } catch (e) { status("Captions failed: " + e.message, "bad"); }
+  btn.disabled = false;
+}
+
+/* ---------------- wiring ---------------- */
+$("#rate").innerHTML = RATES.map((r) => `<option value="${r.toFixed(2)}">×${r.toFixed(2)}</option>`).join("");
+$("#rate").onchange = () => { setRate(parseFloat($("#rate").value)); $("#rate").blur(); };   // give the hotkeys back
+$("#rDown").onclick = (e) => { e.preventDefault(); setRate(S.rate - 0.05); };
+$("#rUp").onclick = (e) => { e.preventDefault(); setRate(S.rate + 0.05); };
+$("#bPlay").onclick = togglePlay;
+$("#bStart").onclick = () => seek(0);
+$("#bPrev").onclick = () => jumpShot(-1);
+$("#bNext").onclick = () => jumpShot(1);
+$("#bLoop").onclick = toggleLoop;
+$("#bMic").onclick = () => enableMic(store.get("device", "") || undefined);
+$("#bCheck").onclick = micCheck;
+$("#bRec").onclick = () => (S.rec ? stopRecording() : startRecording());
+$("#bBuild").onclick = buildMp4;
+$("#bOpen").onclick = () => S.piece && api(`/api/open/${encodeURIComponent(S.piece)}`, { method: "POST" }).catch((e) => status(e.message, "bad"));
+$("#help").addEventListener("toggle", () => { if ($("#help").open) diag(); });
+const size = () => document.documentElement.style.setProperty("--script-size", store.get("size", 26) + "px");
+$("#aMinus").onclick = () => { store.set("size", Math.max(16, store.get("size", 26) - 2)); size(); S.lastLineTop = -1; S.lastKey = ""; };
+$("#aPlus").onclick = () => { store.set("size", Math.min(48, store.get("size", 26) + 2)); size(); S.lastLineTop = -1; S.lastKey = ""; };
+$("#lead").value = store.get("lead", 150); $("#lead").onchange = () => store.set("lead", +$("#lead").value);
+$("#nudge").value = store.get("nudge", 0);
+const showNudge = () => { const v = +$("#nudge").value; $("#nudgeV").textContent = (v > 0 ? "+" : "") + v + " ms"; store.set("nudge", v); };
+$("#nudge").oninput = showNudge; showNudge();
+const persist = (id, key, def, prop = "value") => { const el = $(id); el[prop] = store.get(key, def); el.addEventListener("change", () => store.set(key, el[prop])); };
+persist("#guideOn", "guideOn", true, "checked");
+persist("#guideRec", "guideRec", false, "checked");
+persist("#from", "from", "start");
+persist("#preroll", "preroll", "2");
+persist("#countin", "countin", "2");
+persist("#hear", "hear", "broadcast");
+persist("#preset", "preset", "broadcast");
+persist("#motion", "motion", "blend");
+persist("#step", "step", false, "checked");
+$("#guideVol").value = store.get("guideVol", 0.8); $("#guideVol").oninput = () => store.set("guideVol", +$("#guideVol").value);
+const stepUI = () => { $("#fromWrap").hidden = $("#step").checked; if (!$("#step").checked) hideHold(); else if (S.data && vid.paused) showHold(shotAt(vid.currentTime + 1e-3)); };
+$("#step").addEventListener("change", stepUI); stepUI();
+$("#hear").addEventListener("change", () => { if (S.review) { const t = S.review; stopReview(); vid.pause(); reviewTake(t); } });
+size();
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.matches("input[type=number], input[type=text], select") || e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key;
+  if (k === " ") { e.preventDefault(); if (!S.rec) togglePlay(); }
+  else if (k === "r" || k === "R") { e.preventDefault(); S.rec ? stopRecording() : startRecording(); }
+  else if (k === "Escape") { if (S.rec) stopRecording(); else { vid.pause(); stopReview(); } }
+  else if (k === "[") jumpShot(-1);
+  else if (k === "]") jumpShot(1);
+  else if (k === "l" || k === "L") toggleLoop();
+  else if (k === "g" || k === "G") { $("#guideOn").checked = !$("#guideOn").checked; store.set("guideOn", $("#guideOn").checked); }
+  else if (k === "s" || k === "S") { if (!S.rec) { $("#step").checked = !$("#step").checked; store.set("step", $("#step").checked); stepUI(); } }
+  else if (k === "-" || k === "_") setRate(S.rate - 0.05);
+  else if (k === "=" || k === "+") setRate(S.rate + 0.05);
+  else if (k === "Home") seek(0);
+});
+
+loadPieces().catch((e) => { $("#loadmsg").textContent = "Server not answering: " + e.message; });
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
