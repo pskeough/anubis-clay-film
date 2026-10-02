@@ -114,10 +114,8 @@ installing anything outside this folder. At the end, give me a report.
      --endpoint URL --model ID. The default is http://127.0.0.1:8080/v1 with model "local",
      which is whatever llama-server has loaded.
    - Tested default: Qwen3-14B on llama-server (https://huggingface.co/Qwen/Qwen3-14B-GGUF).
-   - Used for the author's films: Qwen3.8-27B Heretic-abliterated "RVN", Q4_K_M with MTP
-     head, file RVN-Q4_K_M-mtp.gguf (17.0 GB), from
-     https://huggingface.co/0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF
-     It was run across two 16 GB cards in tensor-split mode. Ask me which one I want.
+   - Recommended: Qwen3.8-27B (https://huggingface.co/Qwen/Qwen3.8-27B), as a Q4_K_M GGUF
+     (about 17 GB). It was run across two 16 GB cards in tensor-split mode. Ask me which one I want.
    - Report whether anything is listening on the endpoint. Do not start or download a model.
 
 9. Tests. Run each and report the output:

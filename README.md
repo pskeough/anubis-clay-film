@@ -4,7 +4,7 @@ Scriptorium is a local pipeline that turns a written text into a narrated film. 
 
 > **Early release.** This is the first public version. I will keep updating it and making it more user-friendly. Expect rough edges, Windows-specific scripts and paths tuned to one machine.
 
-The first film made with it is *Anubis*, a narrated short adapted from a 634-word prose piece: https://www.youtube.com/watch?v=TODO
+The first film made with it is *Anubis*, a narrated short adapted from a 634-word prose piece: https://youtu.be/npvfbjC5cDI
 
 ## Pipeline
 
@@ -150,7 +150,7 @@ These are the models used for the films made with this pipeline. Every one can b
 
 | Role | Model | File | Link | Licence (from the model card) |
 |---|---|---|---|---|
-| Planner (director), as used for the author's films | Qwen3.8-27B Heretic-abliterated "RVN" (`general.name` Qwen38 Ara v5), Q4_K_M with MTP head, served by llama-server | `RVN-Q4_K_M-mtp.gguf` | [0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF](https://huggingface.co/0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF/blob/main/RVN-Q4_K_M-mtp.gguf) | Apache 2.0 |
+| Planner (director) | Qwen3.8-27B, run as a Q4_K_M GGUF on llama-server; any OpenAI-compatible chat model works | any Q4_K_M GGUF of the model | [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) | Apache 2.0 |
 | Planner, tested default | Qwen3-14B on llama-server | any Qwen3-14B GGUF | [Qwen/Qwen3-14B-GGUF](https://huggingface.co/Qwen/Qwen3-14B-GGUF) | Apache 2.0 |
 | Stills: diffusion model | Qwen-Image 2.1, int8 ConvRot (ComfyUI repack) | `qwen_image_2.1_int8_convrot.safetensors` | [Comfy-Org/Qwen-Image-2.1](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/diffusion_models/qwen_image_2.1_int8_convrot.safetensors) | Qwen Research licence ([LICENSE](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE)) |
 | Stills: text encoder | Qwen3-VL 8B, w4a8 | `qwen3vl_8b_w4a8.safetensors` | [Comfy-Org/Qwen-Image-2.1](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/text_encoders/qwen3vl_8b_w4a8.safetensors) | Qwen Research licence |
@@ -163,7 +163,7 @@ These are the models used for the films made with this pipeline. Every one can b
 | Narration engine (optional) | Kokoro-82M | downloaded by the `kokoro` package | | Apache 2.0 |
 | Caption timing | faster-whisper small.en | downloaded by `faster-whisper` | | MIT |
 
-The planner is chosen on the command line: `python -m clay_film plan NAME --endpoint URL --model ID`. The defaults are `http://127.0.0.1:8080/v1` and `local`, which is whatever llama-server has loaded. The 27B above is the model used for the author's films. It needs about 17 GB for weights and was run split across two 16 GB cards. Qwen3-14B is the model the planner was tested with, and it fits one card.
+The planner is chosen on the command line: `python -m clay_film plan NAME --endpoint URL --model ID`. The defaults are `http://127.0.0.1:8080/v1` and `local`, which is whatever llama-server has loaded. The author runs the 27B above. It needs about 17 GB for weights and was run split across two 16 GB cards. Qwen3-14B is the model the planner was tested with, and it fits one card.
 
 `farm/config.py` also lists Z-Image and Qwen-Image-Edit-2509 files used by older graphs. The current stages do not use them, but `farm/preflight.py` checks every entry in `MODELS` and reports the absent ones.
 
