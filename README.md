@@ -91,7 +91,7 @@ The manual steps are the same:
 5. For guide narration, the audio.cpp CLI and the Qwen3-TTS GGUF files. Set `AUDIOCPP_CLI`, `QWEN3TTS_BASE_GGUF` and `QWEN3TTS_VOICEDESIGN_GGUF`.
 6. Copy `.env.example` to `.env` and set any paths that differ from the defaults. The code reads these values from the process environment and does not load `.env` itself, so export them in your shell or set them as user environment variables.
 
-`python -m clay_film selftest` checks the schema, locations, cast, compile step and planner guide without a GPU. `python farm/test_graphs.py` checks the ComfyUI graph builders offline. `python farm/preflight.py` checks ComfyUI, ports, GPUs, disk and model files before a render, and starts nothing.
+`python -m clay_film selftest` checks the schema, locations, cast, compile step and planner guide without a GPU. `python farm/preflight.py` checks ComfyUI, ports, GPUs, disk and model files before a render, and starts nothing.
 
 ## Running
 

@@ -5,7 +5,8 @@ stills from a finished piece with a label drawn on them (an edit draws on the im
 given), clips are fixture clips, narration is silence timed at ~2.4 words a second. Each takes
 a few seconds so the queue can be watched. Clay, compile and assembly are not faked.
 
-    CLAY_FILM_DRY_FIXTURE   piece to copy from (default pieces/basilisk_day2_v2, read only)
+    CLAY_FILM_DRY_FIXTURE   piece to copy from (default pieces/basilisk_day2_v2, read only).
+                            Without one, stills are flat placeholders; dry clips still need it.
     CLAY_FILM_DRY_SCALE     multiplies the delays (default 1; 0 for tests)
 """
 from __future__ import annotations
@@ -54,8 +55,11 @@ def _fixture(folder: str, ext: str, i: int) -> Path:
 def still(kind: str, out: Path, i: int, seed: int, prompt: str, src: Path | None = None, log=None) -> Path:
     from PIL import Image, ImageDraw, ImageOps
     _wait(kind, log)
-    im = Image.open(src or _fixture("stills", ".png", i + (seed or 0))).convert("RGB")
     w, h = 1344, 768
+    try:
+        im = Image.open(src or _fixture("stills", ".png", i + (seed or 0))).convert("RGB")
+    except FileNotFoundError:
+        im = Image.new("RGB", (w, h), (90 + 20 * (i % 4), 90, 100))   # no fixture piece: a flat placeholder
     if im.size != (w, h):
         im = im.resize((w, h))
     if kind == "free":

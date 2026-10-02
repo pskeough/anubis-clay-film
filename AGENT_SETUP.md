@@ -112,7 +112,6 @@ installing anything outside this folder. At the end, give me a report.
 
 9. Tests. Run each and report the output:
      python -m clay_film selftest
-     python farm/test_graphs.py
      python farm/preflight.py
      python -m clay_film guide --seconds 30
      python -m clay_film validate examples/example_plan.json
@@ -123,7 +122,8 @@ installing anything outside this folder. At the end, give me a report.
       python -m clay_film new setup_test examples/example_plan.json
       python -m clay_film run setup_test --stages compile,narrate,clay,stills
       python -m clay_film status setup_test
-    The clay stage runs for real (CPU, Node). Report any failure.
+    The clay stage runs for real (CPU, Node). Without a fixture piece the dry stills are flat
+    placeholder images; that is expected. Report any failure.
 
 11. Report. A short table: each item above as ready, missing or check, with the one action
     I need to take for each missing item. List every file you downloaded or installed and
