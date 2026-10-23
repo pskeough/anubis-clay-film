@@ -676,6 +676,19 @@ def piece_state(name: str) -> dict:
 # -- the app ----------------------------------------------------------------------------------
 
 app = FastAPI(title="Clay Film Studio")
+LOCAL = {"127.0.0.1", "localhost"}
+
+
+@app.middleware("http")
+async def local_only(request, call_next):
+    """Refuse what a web page elsewhere could send: a Host that is not this machine (DNS rebinding) and a
+    non-GET request from another origin (cross-site form or fetch). Browsers always send Origin there."""
+    from urllib.parse import urlparse
+    host = (request.headers.get("host") or "").rsplit(":", 1)[0]
+    origin = request.headers.get("origin")
+    if host not in LOCAL or (request.method != "GET" and origin and urlparse(origin).hostname not in LOCAL):
+        return JSONResponse({"error": "the studio accepts local requests only"}, status_code=403)
+    return await call_next(request)
 
 
 @app.get("/api/meta")

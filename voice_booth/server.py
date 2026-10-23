@@ -649,7 +649,19 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", "0"))
         return self.rfile.read(n) if n else b""
 
+    def local_only(self, post=False):
+        """Refuse requests a web page elsewhere could make: a Host that is not this booth (DNS rebinding),
+        and a POST from another origin (a cross-site form or fetch). Browsers always send Origin there."""
+        own = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
+        origin = self.headers.get("Origin")
+        if self.headers.get("Host") not in own or (post and origin and origin not in {f"http://{h}" for h in own}):
+            self.send_error(403, "voice booth accepts local requests only")
+            return False
+        return True
+
     def do_GET(self):
+        if not self.local_only():
+            return
         u = urlparse(self.path)
         parts = [unquote(p) for p in u.path.strip("/").split("/") if p]
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
@@ -702,6 +714,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": (e.stderr or b"").decode("utf-8", "replace")[-800:] or str(e)}, 500)
 
     def do_POST(self):
+        if not self.local_only(post=True):
+            return
         u = urlparse(self.path)
         parts = [unquote(p) for p in u.path.strip("/").split("/") if p]
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
