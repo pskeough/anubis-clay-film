@@ -21,7 +21,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  loadSpace, solveCamera, renderPasses, renderShot, analyzeShot, depthPng,
+  loadSpace, solveCamera, renderPasses, renderShot, analyzeShot, depthPng, figureMasks, renderPeopleClay,
+  type FigureMask, type CameraSpec,
   type SpaceSpec, type ShotSpec as BoardShot, type FigureSpec, type Framing, type VisibleProp,
 } from "./storyboard.js";
 import { buildShotPrompt } from "./shotprompt.js";
@@ -129,6 +130,18 @@ const FIG_POSE_OF: Record<Pose, FigureSpec["pose"]> = {
   reaching: "reaching",
 };
 
+/** Top-of-head height in metres per pose, for the camera solve. Every figure used to be solved as a
+ *  1.7 m standing body, so a close on a seated or kneeling person framed the room at full-body scale
+ *  while the prompt asked for head and shoulders (clay_film gardening sets, 2026-10-11). */
+const POSE_HEIGHT: Partial<Record<Pose, number>> = {
+  seated: 1.28, seated_hunched: 1.15, sitting_on_floor: 0.9, crouching: 1.0, kneeling: 1.22,
+  leaning_on_furniture: 1.55, head_down: 1.6, lying_down: 0.45,
+};
+const poseHeight = (p?: Pose): number => (p && POSE_HEIGHT[p]) ?? 1.7;
+
+/** A figure covering less of the frame than this is out of shot: no mannequin, no prompt line. */
+export const IN_SHOT_COVER = 0.002;
+
 export interface ResolveOpts {
   width?: number;
   height?: number;
@@ -153,6 +166,15 @@ export interface ResolveOpts {
   }[];
   /** Prop id to frame when there is no figure — defaults to the largest visible solid. */
   emptySubject?: string;
+  /** Nudge the solved camera so nobody in the shot is hidden behind a nearer person (revealCamera). */
+  reveal?: boolean;
+  /**
+   * Explicit camera azimuth around the subject, degrees (0 = from the room's front wall, z = 0 side;
+   * 90 = from its +x side). Overrides both the facing-relative azimuth and the index spread, so a
+   * director can put the camera on a chosen side of the action line. The solver still sets distance,
+   * height and occlusion stand-off along that bearing.
+   */
+  azimuth?: number;
   /**
    * Put the figure's proxy solid into the depth/clay passes. Default FALSE, and that default is a
    * measured result rather than a preference.
@@ -190,6 +212,13 @@ export interface ResolvedShot {
   /** Line/edge pass. Unlike clay it carries NO tonal information, so it cannot mislead a hosted model
    *  about lighting while still stating the geometry unambiguously. */
   edge: Buffer;
+  /** One mask per figure, in `board.figures` order (subject first, then extraFigures), for the
+   *  two-pass still. Drawn from the bone rig at standing height, never from the solve's box proxy. */
+  masks: FigureMask[];
+  /** The clay pass with every figure in it as a lit mannequin (the two-pass stand-ins). */
+  peopleClay: Buffer | null;
+  /** The camera move revealCamera made (degrees round the aim point, degrees higher), or null. */
+  revealed: { yaw: number; rise: number; seen: number[] } | null;
 }
 
 /**
@@ -229,7 +258,7 @@ export async function resolveShot(
     const yaw = opts.figureYaw ?? 180;             // facing the front wall by default
     figures.push({
       id: "subject", at, yaw,
-      height: 1.7,
+      height: poseHeight(sh.pose),
       pose: FIG_POSE_OF[sh.pose ?? "standing"] ?? "standing",
       label: spec.subject.description.slice(0, 40),
     });
@@ -247,7 +276,7 @@ export async function resolveShot(
     (opts.extraFigures ?? []).forEach((f, i) => {
       figures.push({
         id: f.id ?? `figure_${i + 2}`,
-        at: f.at, yaw: f.yaw ?? 180, height: f.height ?? 1.7,
+        at: f.at, yaw: f.yaw ?? 180, height: f.height ?? poseHeight(f.pose),
         pose: FIG_POSE_OF[f.pose ?? "standing"] ?? "standing",
         label: (f.label ?? `figure ${i + 2}`).slice(0, 40),
       });
@@ -264,6 +293,7 @@ export async function resolveShot(
     // framed the same azimuth forever, which is exactly what the line above says it must not do.
     azimuth = ((AZIMUTH_OFFSET[sh.angle] ?? 0) + index * 37) % 360;
   }
+  if (typeof opts.azimuth === "number") azimuth = ((opts.azimuth % 360) + 360) % 360;
 
   // "small_in_frame"/"far_from_camera" are size statements wearing placement clothing.
   const demote = sh.placement === "small_in_frame" || sh.placement === "far_from_camera";
@@ -287,6 +317,7 @@ export async function resolveShot(
   // pass are guaranteed to describe the SAME camera. Re-solving per consumer is how those three
   // drift apart.
   board.camera = solveCamera(framing, space, figures, W, H);
+  const revealed = opts.reveal && figures.length > 1 ? revealCamera(board, space, figures) : null;
 
   const visible = analyzeShot(board, space);
   // A SECOND pass at a far lower floor, for existence questions rather than description.
@@ -323,8 +354,72 @@ export async function resolveShot(
     : passes.depth;
   const clay = renderShot(passBoard, space, { guides: false, mode: "clay" }) as Buffer;
   const edge = passes.edge;
+  // The rig scales its pose by height, so it takes the standing 1.7 m: the solve's per-pose height
+  // (1.28 m seated) would put a seated head at 0.9 m.
+  const rig = figures.map((f) => ({ ...f, height: 1.7 }));
+  const masks = figureMasks({ ...board, framing: undefined, figures: [] }, space, rig);
+  // Only the bodies the camera actually sees get a mannequin. A mannequin for someone the prompt
+  // leaves out comes back as an undescribed stranger (gardening p01 s005, 2026-10-11).
+  const shown = rig.filter((_, k) => (masks[k]?.cover ?? 0) >= IN_SHOT_COVER);
+  const peopleClay = shown.length ? renderPeopleClay({ ...board, framing: undefined, figures: [] }, space, shown) : null;
 
-  return { board, inventory, visible, inFrame, clay, depth, edge };
+  return { board, inventory, visible, inFrame, clay, depth, edge, masks, peopleClay, revealed };
+}
+
+/** Under this share of their own body in view, a person counts as hidden behind someone nearer. */
+export const HIDDEN_SEEN = 0.3;
+
+/**
+ * Move the camera a little so nobody in the shot is hidden behind a nearer person, keeping the aim
+ * point. The still edit will not keep a described person hidden: it brings them forward, and the two
+ * swap seats (gardening p01 s005 and p09 s006, the woman behind the narrator; 26 people in 36 scenes
+ * on 2026-10-11). Swinging the camera round the aim point, or raising it, opens the gap a camera
+ * operator would find, and leaves seats and eyelines as they were. Moves are angles, not metres:
+ * p01 s005 is 5.7 m back on a 24-degree lens, where 0.6 m of side step only took the woman from
+ * 12% to 23% seen. The shot gate's line check still runs on the moved camera.
+ * Changes board.camera in place; returns the move in degrees, or null when nothing was hidden or no
+ * move helped.
+ */
+function revealCamera(board: BoardShot, space: SpaceSpec, figures: FigureSpec[]):
+  { yaw: number; rise: number; seen: number[] } | null {
+  const cam = board.camera!;
+  // search at a third of the size: the masks only need shares, not edges
+  const small = { ...board, framing: undefined, figures: [], width: Math.round((board.width ?? 1024) / 3),
+                  height: Math.round((board.height ?? 1344) / 3) };
+  const rig = figures.map((f) => ({ ...f, height: 1.7 }));
+  const at = (c: CameraSpec) => figureMasks({ ...small, camera: c }, space, rig);
+  const m0 = at(cam);
+  const inShot = m0.map((m) => (m?.cover ?? 0) >= IN_SHOT_COVER);
+  if (process.env.REVEAL_DEBUG) console.error(`reveal start: ${m0.map((x, k) => `${k}:${(x?.cover ?? 0).toFixed(4)}/${(x?.seen ?? 0).toFixed(2)}`).join(" ")}`);
+  if (!m0.some((m, k) => inShot[k] && m.seen < HIDDEN_SEEN)) return null;
+  // the camera's offset from the aim point, in plan
+  const dx0 = cam.pos[0] - cam.look[0], dz0 = cam.pos[2] - cam.look[2];
+  const reach = Math.hypot(dx0, dz0);
+  const rise0 = Math.atan2(cam.pos[1] - cam.look[1], reach);
+  let best: { cost: number; c: CameraSpec; yaw: number; rise: number; seen: number[] } | null = null;
+  for (const yaw of [-30, -25, -20, -15, -10, -5, 0, 5, 10, 15, 20, 25, 30]) {
+    for (const rise of [0, 5, 10, 15]) {
+      if (!yaw && !rise) continue;
+      const cost = yaw * yaw + 1.5 * rise * rise;   // a high angle changes the shot more than a swing
+      if (best && cost >= best.cost) continue;
+      const t = (yaw * Math.PI) / 180, e = rise0 + (rise * Math.PI) / 180;
+      const pos: [number, number, number] = [
+        cam.look[0] + dx0 * Math.cos(t) - dz0 * Math.sin(t),
+        rise ? cam.look[1] + reach * Math.tan(e) : cam.pos[1],
+        cam.look[2] + dx0 * Math.sin(t) + dz0 * Math.cos(t),
+      ];
+      const c: CameraSpec = { ...cam, pos };
+      const m = at(c);
+      if (process.env.REVEAL_DEBUG) console.error(`reveal ${yaw} ${rise}: ${m.map((x, k) => `${k}:${(x?.cover ?? 0).toFixed(4)}/${(x?.seen ?? 0).toFixed(2)}`).join(" ")}`);
+      // everyone who was in the shot stays in it, and nobody is hidden any more
+      if (m.every((x, k) => !inShot[k] || ((x?.cover ?? 0) >= IN_SHOT_COVER && x.seen >= 0.45))) {
+        best = { cost, c, yaw, rise, seen: m.map((x) => +(x?.seen ?? 0).toFixed(2)) };
+      }
+    }
+  }
+  if (!best) return null;
+  board.camera = best.c;
+  return { yaw: best.yaw, rise: best.rise, seen: best.seen };
 }
 
 /** Write the control pair to disk so ComfyUI can be handed filenames rather than bytes. */

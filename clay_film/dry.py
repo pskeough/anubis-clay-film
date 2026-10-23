@@ -85,6 +85,8 @@ def clip(out: Path, i: int, log=None) -> Path:
 
 
 def _ffmpeg() -> str | None:
+    if os.environ.get("FFMPEG"):
+        return os.environ["FFMPEG"]
     cand = paths.PODCAST_PY.parent.parent / "Lib" / "site-packages" / "imageio_ffmpeg" / "binaries"
     if cand.is_dir():
         for exe in sorted(cand.glob("ffmpeg-win*.exe"), reverse=True):

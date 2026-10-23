@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -163,6 +164,17 @@ def main() -> int:
         dst = work / f"{sid}.mp4"
         clip, still = piece / "clips" / f"{sid}.mp4", piece / "stills" / f"{sid}.png"
 
+        # _assemble_keep/sNNN.mp4: an already graded, slot-length segment from an earlier assembly,
+        # used as-is. Recovery path for clips whose raw file was lost (oceanus 2026-10-03); it
+        # is only valid while the timeline is unchanged, so the length is checked.
+        keep = piece / "_assemble_keep" / f"{sid}.mp4"
+        if keep.exists() and abs(duration(keep) - length) < 0.1:
+            shutil.copy2(keep, dst)
+            n_clip += 1
+            segs.append(dst)
+            wants.append(want)
+            print(f"  {sid} {want:5.2f}s  kept segment")
+            continue
         if clip.exists():
             have = duration(clip)
             sharp = (f"unsharp=5:5:{a.unsharp:.2f}:5:5:0.0,"

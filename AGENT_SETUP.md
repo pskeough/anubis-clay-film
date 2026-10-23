@@ -1,139 +1,106 @@
 # Agent setup
 
-Clone the repository, open a coding agent (Claude Code or similar) in the repository folder, and give it the prompt below. The agent does the setup and reports what is still missing. It does not render anything.
+Open a coding agent (Claude Code or similar) in the repository folder and give it the prompt below. It sets everything up, asks before large downloads, and ends with a report of what is ready and what is missing. It renders nothing.
 
-Items marked "check" are things the repository does not pin down. The agent should confirm them on your machine rather than assume.
+The same steps work by hand: read the prompt as a checklist.
 
 ---
 
 ```text
 You are setting up Scriptorium, a local text-to-film pipeline, in the current folder (a clone of
-https://github.com/pskeough/scriptorium). Do the steps below in order. Do not render stills or
-clips and do not start long GPU jobs. Ask me before any download larger than 1 GB and before
-installing anything outside this folder. At the end, give me a report.
+https://github.com/pskeough/scriptorium). Work through the steps in order. Do not render stills or
+clips and do not start long GPU jobs. Ask me before any download over 1 GB and before installing
+anything outside this folder. Never put keys in a file git tracks (.env is gitignored; check it).
+Finish with the report in step 9.
 
-1. Hardware.
-   - Run `nvidia-smi --query-gpu=index,name,memory.total,memory.used --format=csv`.
-   - Report each GPU, its VRAM, and total system RAM.
-   - The pipeline was built on 2x 16 GB NVIDIA cards and 32 GB RAM on Windows 11.
-     farm/config.py expects two workers on GPUs 0 and 1 (ports 8190, 8191) for stills and
-     one worker seeing all GPUs (port 8192) for motion. It refuses to start a worker on a
-     card with less than 12000 MiB free (MIN_FREE_MIB).
-   - The motion checkpoint is about 21 GB. Tell me if the available VRAM cannot hold it,
-     and say which stages can still run (plan, compile, clay, stills, assemble, voice booth).
-   - farm/farm.ps1 and farm/phase.ps1 are PowerShell. On Linux or macOS, say so and note that
-     the farm start/stop will need porting.
+1. Machine.
+   - Run `nvidia-smi --query-gpu=index,name,memory.total,memory.used --format=csv` and report each
+     card, its VRAM, total RAM and the Windows page file size.
+   - The pipeline was built on 2x 16 GB cards, 32 GB RAM, Windows 11. Stills need one 16 GB card.
+     H3 motion (21 GB checkpoint) runs on a worker spanning two cards; on one card it needs
+     CLAY_FILM_H3_SINGLE_GPU=1, FARM_EXTRA_ARGS=--disable-pinned-memory and a large page file.
+     Tell me which layout this machine supports, and which stages can run if neither fits
+     (plan, compile, clay, stills, assemble and the voice booth all run without H3).
+   - On Linux or macOS, say so: farm/farm.ps1 and farm/phase.ps1 are PowerShell and would need porting.
 
-2. Python.
-   - Python 3.12 or later. Report the version.
-   - Install torch with CUDA support matching the installed driver (check the right index URL
-     for the CUDA version nvidia-smi reports).
-   - `pip install -r requirements.txt`.
-   - Confirm `python -c "import torch; print(torch.cuda.is_available())"` prints True.
+2. Base install.
+   - Run `powershell -ExecutionPolicy Bypass -File setup.ps1`. It makes .venv, installs torch (CUDA
+     index cu128, right for RTX 50-series; pass -CudaIndex for older cards after checking the
+     driver's CUDA version), installs requirements.txt, runs npm install in filmprep, writes .env
+     and runs `python -m clay_film selftest`.
+   - If Python 3.12+, Node 20+ or ffmpeg is missing, tell me and stop at that point.
+   - Confirm `.venv\Scripts\python -c "import torch; print(torch.cuda.is_available())"` prints True.
 
-3. Node (only needed for clay staging).
-   - Node 20 or later. `cd filmprep && npm install`. Confirm `npx tsx --version` works there.
+3. ComfyUI.
+   - Look for an install: COMFY_ROOT if set, then C:\ComfyUI. farm/config.py expects
+     COMFY_ROOT\venv\Scripts\python.exe and COMFY_ROOT\main.py. If the layout differs (portable
+     build, other venv), report it and ask before editing anything.
+   - If there is none, ask me, then install the current ComfyUI release into a venv at that layout.
+   - Check each node the graphs in farm/graphs.py use by searching ComfyUI's source and
+     custom_nodes for the class name, and report found or missing with the defining file:
+       core: UNETLoader, CLIPLoader (types "qwen_image" and "minimax"), VAELoader, LoadImage,
+         KSampler, KSamplerSelect, BasicScheduler, BasicGuider, RandomNoise,
+         SamplerCustomAdvanced, VAEDecode, SaveImage, EmptyLatentImage, LoraLoaderModelOnly
+       Qwen-Image 2.1: TextEncodeQwenImage21, QwenImage21Cache
+       MiniMax H3: MiniMaxH3ImageToVideo
+       BlockSparseAttention (used by motion unless --no-sparse; find which package provides it)
+       VHS_VideoCombine from https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite (install if missing)
+       UNETLoaderDisTorch2MultiGPU from ComfyUI-MultiGPU (only for the two-card H3 worker)
+   - Set COMFY_ROOT in .env if it is not C:\ComfyUI.
 
-4. ComfyUI.
-   - Look for an existing ComfyUI install. Check COMFY_ROOT if set, then C:\ComfyUI.
-   - farm/config.py expects ComfyUI's Python at COMFY_ROOT\venv\Scripts\python.exe and
-     COMFY_ROOT\main.py. If ComfyUI is installed another way (portable build, Linux venv),
-     report the difference; do not edit farm/config.py without asking me.
-   - If none exists, ask me before installing ComfyUI. If I agree, install the current
-     ComfyUI release into a venv at that layout.
-   - The graphs in farm/graphs.py use these nodes. Start nothing; check each one by searching
-     ComfyUI's source and custom_nodes folder for the class name:
-       Core loaders and samplers: UNETLoader, CLIPLoader (types "qwen_image" and "minimax"),
-         VAELoader, LoadImage, KSampler, KSamplerSelect, BasicScheduler, BasicGuider,
-         RandomNoise, SamplerCustomAdvanced, VAEDecode, SaveImage, EmptyLatentImage,
-         LoraLoaderModelOnly.
-       Qwen-Image 2.1: TextEncodeQwenImage21, QwenImage21Cache (check whether these are in
-         core ComfyUI for the installed version or need a custom node).
-       MiniMax H3: MiniMaxH3ImageToVideo (check: core or custom node for the installed version).
-       BlockSparseAttention, used by motion unless --no-sparse is passed (check which package
-         provides it).
-       VHS_VideoCombine, from ComfyUI-VideoHelperSuite
-         (https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite). Install it if missing.
-     Report each node as found or missing, with the file that defines it.
-   - Not needed by the current stages: UNETLoaderDisTorch2MultiGPU (ComfyUI-MultiGPU) and
-     UnetLoaderGGUF (ComfyUI-GGUF). They are used only by older graphs.
+4. Model weights. File names must match exactly. First list which are already present under
+   COMFY_ROOT\models (or COMFY_EXTRA_MODELS). Show me the licences and the total (about 58 GB),
+   and wait for my yes. URLs: https://huggingface.co/<repo>/resolve/main/<path>.
+     Comfy-Org/Qwen-Image-2.1
+       diffusion_models/qwen_image_2.1_int8_convrot.safetensors              7.26 GB
+       text_encoders/qwen3vl_8b_w4a8.safetensors                             6.31 GB
+       vae/qwen_image_2.1_vae_bf16.safetensors                               0.68 GB
+     Comfy-Org/MiniMax-H3
+       diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors    20.97 GB
+       text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors           15.69 GB
+         (save as qwen3vl32b_h3_nvfp4.safetensors, the name the graphs load)
+       vae/minimax_h3_video_vae_fp16.safetensors                             5.21 GB
+       loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors       1.96 GB
+   Each goes in the models subfolder its loader reads (diffusion_models, text_encoders, vae, loras).
+   Licences: Qwen Research licence (Qwen-Image 2.1), MiniMax H3 Community License (H3).
+   farm/config.py also lists Z-Image and Qwen-Image-Edit-2509 files for older graphs. Do not
+   download them; preflight will report them missing, which is expected.
 
-5. Model weights. Place each file in the ComfyUI models subfolder its loader reads
-   (UNETLoader -> models/diffusion_models, CLIPLoader -> models/text_encoders,
-   VAELoader -> models/vae, LoraLoaderModelOnly -> models/loras). The file names must match
-   exactly; they come from farm/config.py MODELS and the defaults of
-   farm/graphs.py minimax_h3_official.
-     Stills (Qwen-Image 2.1), from https://huggingface.co/Comfy-Org/Qwen-Image-2.1
-       diffusion_models/qwen_image_2.1_int8_convrot.safetensors   7.26 GB   diffusion model
-       text_encoders/qwen3vl_8b_w4a8.safetensors                  6.31 GB   text encoder
-       vae/qwen_image_2.1_vae_bf16.safetensors                    0.68 GB   vae
-     Motion (MiniMax H3), from https://huggingface.co/Comfy-Org/MiniMax-H3
-       diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors        20.97 GB  diffusion model
-       text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors               15.69 GB  text encoder
-         (save it as qwen3vl32b_h3_nvfp4.safetensors, the name the graphs load)
-       vae/minimax_h3_video_vae_fp16.safetensors                                5.21 GB   vae
-       loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors          1.96 GB   lora
-     Direct download URLs follow the pattern
-       https://huggingface.co/<repo>/resolve/main/<path above>
-     Licences: Qwen-Image 2.1 files are under the Qwen Research licence; MiniMax H3 files are
-     under the MiniMax H3 Community License Agreement. Show me both before downloading.
-   - These are the files the author's films used. Other checkpoints work if the names in
-     farm/config.py MODELS and the farm/graphs.py defaults are changed to match.
-   - Show me the total size (about 58 GB) and wait for my approval before downloading.
-   - First list which of these files are already present anywhere under COMFY_ROOT\models or
-     COMFY_EXTRA_MODELS.
-   - farm/config.py MODELS also lists Z-Image and Qwen-Image-Edit-2509 files. The current
-     stages do not use them. Do not download them. farm/preflight.py will report them as
-     missing; say so in the report rather than treating it as a failure.
+5. Narration.
+   - Guide narration (optional) uses the audio.cpp CLI with qwen3-tts-12hz-1.7b-base-q8_0.gguf and
+     qwen3-tts-voicedesign-q8_0.gguf. Their source is not recorded here: find them, show me the
+     sources, and ask before building or downloading. Set AUDIOCPP_CLI, QWEN3TTS_BASE_GGUF and
+     QWEN3TTS_VOICEDESIGN_GGUF in .env.
+   - Kokoro and faster-whisper fetch their own weights on first use.
+   - CAPTION_FONTS_DIR must contain GARABD.TTF (Garamond Bold) for the default caption style. Report
+     whether it does.
 
-6. Guide narration (Qwen3-TTS). Optional; the voice booth can replace it.
-   - The narrate stage calls the audio.cpp CLI with Qwen3-TTS 1.7B GGUF files:
-       qwen3-tts-12hz-1.7b-base-q8_0.gguf
-       qwen3-tts-voicedesign-q8_0.gguf
-   - Where to get audio.cpp and these GGUFs is not recorded in the repository (check). Find
-     them, show me the sources, and ask before building or downloading.
-   - Kokoro and faster-whisper small.en download their own weights on first use through
-     the kokoro and faster-whisper packages.
-
-7. Environment.
-   - Copy .env.example to .env. Every value is optional and defaults are repo-relative.
-     Set what differs on this machine:
-       CLAY_FILM_PIECES, CLAY_FILM_ROKO, CLAY_FILM_LIB, CLAY_FILM_FARM, CLAY_FILM_PY,
-       CLAY_FILM_PODCAST_PY, CLAY_FILM_TTS_ENGINE, COMFY_ROOT, COMFY_EXTRA_MODELS,
-       AUDIOCPP_CLI, QWEN3TTS_BASE_GGUF, QWEN3TTS_VOICEDESIGN_GGUF, CLAY_FILM_LLM_SCRIPT,
-       CAPTION_FONTS_DIR, FFMPEG, CLAY_FILM_API_KEY, OPENROUTER_API_KEY.
-   - No code in the repository loads .env; every value is read from the process environment.
-     Keep .env as the record of this machine's values, and tell me how to export them in my
-     shell (or set them as user environment variables) before running the pipeline.
-   - Do not put API keys in any file that git tracks. .env is in .gitignore; confirm that.
-   - CAPTION_FONTS_DIR must contain GARABD.TTF (Garamond Bold) for the default caption font.
-     Report whether it does.
-
-8. Planner model.
-   - `python -m clay_film plan` needs an OpenAI-compatible chat endpoint. Choose it with
-     --endpoint URL --model ID. The default is http://127.0.0.1:8080/v1 with model "local",
-     which is whatever llama-server has loaded.
-   - Tested default: Qwen3-14B on llama-server (https://huggingface.co/Qwen/Qwen3-14B-GGUF).
-   - Recommended: Qwen3.8-27B (https://huggingface.co/Qwen/Qwen3.8-27B), as a Q4_K_M GGUF
-     (about 17 GB). It was run across two 16 GB cards in tensor-split mode. Ask me which one I want.
+6. Planner.
+   - `python -m clay_film plan` needs an OpenAI-compatible chat endpoint (--endpoint, --model;
+     default http://127.0.0.1:8080/v1 and "local"). Tested: Qwen3-14B on llama-server (one card).
+     Used for the films: Qwen3.8-27B Q4_K_M, about 17 GB, split across two cards. Ask me which.
    - Report whether anything is listening on the endpoint. Do not start or download a model.
 
-9. Tests. Run each and report the output:
-     python -m clay_film selftest
-     python farm/preflight.py
-     python -m clay_film guide --seconds 30
-     python -m clay_film validate examples/example_plan.json
-   preflight.py is read-only. It will fail on the GPU check if another process holds VRAM,
-   and on unused legacy model names (step 5); report those separately from real failures.
+7. Finishing tools (optional; ask me whether I want them). finishing/README.md has the details.
+   - retime: ComfyUI-Frame-Interpolation checkout and rife426.pth; set RIFE_ARCH_DIR, RIFE_WEIGHTS.
+   - score: the Stable Audio 3 repo in its own venv; Medium weights download on first use. Show me
+     the model licence. SA3_MODEL defaults to medium.
+   - lipsync: the LatentSync repo in its own venv plus the 1.5 (and optionally 1.6) checkpoints;
+     set LATENTSYNC_ROOT (and LATENTSYNC_PY if its venv is elsewhere).
+   - Install none of these without my yes; each is several GB.
 
-10. Dry run. With CLAY_FILM_DRY=1 set, run:
-      python -m clay_film new setup_test examples/example_plan.json
-      python -m clay_film run setup_test --stages compile,narrate,clay,stills
-      python -m clay_film status setup_test
-    The clay stage runs for real (CPU, Node). Without a fixture piece the dry stills are flat
-    placeholder images; that is expected. Report any failure.
+8. Checks. Run each and report the output:
+     .venv\Scripts\python -m clay_film selftest
+     .venv\Scripts\python farm\preflight.py
+     .venv\Scripts\python -m clay_film validate examples\example_plan.json
+     .venv\Scripts\python tests\mcp_handshake.py
+   Then a dry run with CLAY_FILM_DRY=1 set in the shell:
+     .venv\Scripts\python -m clay_film new setup_test examples\example_plan.json
+     .venv\Scripts\python -m clay_film run setup_test --stages compile,narrate,clay,stills
+     .venv\Scripts\python -m clay_film status setup_test
+   preflight is read-only; it fails if another process holds VRAM and on the unused legacy model
+   names. Report those apart from real failures. Dry stills are flat placeholders; that is expected.
 
-11. Report. A short table: each item above as ready, missing or check, with the one action
-    I need to take for each missing item. List every file you downloaded or installed and
-    where. Do not commit anything.
+9. Report. One table: each step as ready, missing or check, and the one action I need to take for
+   each missing item. List every file you downloaded or installed and where. Do not commit.
 ```

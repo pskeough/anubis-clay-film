@@ -89,7 +89,7 @@ def camera_clause(director_motion: str, subject: str = "the subject") -> str:
 def i2va(scene: str, motion: str, *, style: str = "Live-action cinematic film",
          action: str = "", soundscape: str = "", music: str = "",
          subject: str = "the subject", shots: list[str] | None = None,
-         move_target: str = "") -> str:
+         move_target: str = "", end_frame: bool = False, hold: str = "") -> str:
     """One I2V prompt in the shipped template's shape.
 
     `move_target` is what the camera move travels toward, when that is not the
@@ -109,8 +109,15 @@ def i2va(scene: str, motion: str, *, style: str = "Live-action cinematic film",
 
     develop = " ".join((action or "").split()).rstrip(". ") or (
         "the subject continues the action already under way")
-    shot1 = (f"SHOT 1: The scene opens exactly on image 1; {develop}, as "
+    # end_frame: a last keyframe is pinned (MiniMaxH3ImageToVideo last_frame). Saying so lets the
+    # text and the keyframe agree. hold: a sentence restating the look at the end of the shot,
+    # because the style line at the top alone lost to the content words on 2026-10-02 (oceanus).
+    opens = ("opens exactly on image 1 and ends exactly on image 2" if end_frame
+             else "opens exactly on image 1")
+    shot1 = (f"SHOT 1: The scene {opens}; {develop}, as "
              f"{camera_clause(motion, (move_target or subject).strip())}.")
+    if hold:
+        shot1 += f" {hold.strip().rstrip('.')}."
 
     body = [head, shot1]
     if not shots:

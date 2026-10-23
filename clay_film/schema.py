@@ -9,6 +9,7 @@ One shot = one narration sentence = one beat. The narrator reads ~2.4 words a se
 2026-09-24, 92 words = 41 s), and H3 clips run about 5 s, so 8-14 words per shot is the target.
 """
 import json
+import re
 from pathlib import Path
 
 from . import cast as castmod
@@ -60,6 +61,10 @@ SHOT_SCHEMA = {
                 "distance": {"type": "string", "enum": DISTANCES},
                 "lens": {"type": "integer", "enum": LENSES},
                 "frame": {"type": "string", "enum": FRAMES},
+                "azimuth": {"type": "number", "description": "optional explicit bearing of the camera "
+                            "around the subject, degrees: 0 from the room's front wall (z=0), 90 from its "
+                            "+x side, 180 from the back wall, 270 from the -x side. Overrides the "
+                            "facing-relative angle and the empty-shot index spread"},
             },
         },
         "people": {"type": "array", "items": PERSON_SCHEMA, "maxItems": 3,
@@ -75,6 +80,10 @@ SHOT_SCHEMA = {
         "movement": {"type": "string", "description": "section name, for grading; default 'main'"},
     },
 }
+# Qwen-Image-2.1 transformer for the stills (stages.still_model): the base, or the 8-step Turbo.
+# A plan may set "still_model"; it is left out of the schemas below because those are what the
+# planner model is handed, and the render model is the operator's choice, not the planner's.
+STILL_MODELS = ("base", "turbo", "turbo_simple")
 PLAN_SCHEMA = {
     "type": "object",
     "required": ["title", "location", "shots"],
@@ -147,9 +156,15 @@ def shot_mode(s: dict) -> str:
     return s.get("mode") or "clay"
 
 
-def _narration(errs: list, w: str, s: dict, passage: str | None) -> int:
+# A directed plan (clay_film.direct) groups several sentences under one held shot on purpose: the
+# 78-shot Oceanus board cut one picture per clause and was rejected as too many shots, too fast.
+DIRECTED_CAP = 60
+
+
+def _narration(errs: list, w: str, s: dict, passage: str | None, cap: int | None = None) -> int:
     narr = (s.get("narration") or "").strip()
-    cap = 34 if passage is not None else 22  # an author's long sentence cannot be split
+    if cap is None:
+        cap = 34 if passage is not None else 22  # an author's long sentence cannot be split
     if len(narr.split()) > cap:
         errs.append(f"{w}.narration: {len(narr.split())} words is too long for one shot; "
                     f"keep it under {cap}" + ("" if passage is not None else " or split it into two shots"))
@@ -158,14 +173,27 @@ def _narration(errs: list, w: str, s: dict, passage: str | None) -> int:
     return len(narr.split())
 
 
-def _check_free(errs: list, w: str, s: dict, reg: dict, passage: str | None) -> int:
+def _check_free(errs: list, w: str, s: dict, reg: dict, passage: str | None,
+                cap: int | None = None) -> int:
     """A free shot: no location, marks or look_at; people are cast ids for appearance only."""
     for k in ("narration", "subject", "scene", "action", "motion"):
         if k not in s:
             errs.append(f"{w}: missing '{k}'")
     if not (s.get("still_prompt") or s.get("scene") or "").strip():
         errs.append(f"{w}.still_prompt: a free shot needs a still_prompt (or a scene) to draw")
-    words = _narration(errs, w, s, passage)
+    # refs: reference images (location plate first, then people) for a Qwen-2.1 edit in place of
+    # text-to-image. Written by clay_film.direct from the continuity bible.
+    refs = s.get("refs")
+    if refs is not None:
+        if not isinstance(refs, list) or not 1 <= len(refs) <= 10:
+            errs.append(f"{w}.refs: must be a list of 1-10 image paths")
+        else:
+            for r in refs:
+                if not Path(str(r)).is_file():
+                    errs.append(f"{w}.refs: {r!r} does not exist; render the reference first")
+        if not (s.get("ref_prompt") or "").strip():
+            errs.append(f"{w}.ref_prompt: a shot with refs needs a ref_prompt naming each <imageN>")
+    words = _narration(errs, w, s, passage, cap)
     cam = s.get("camera") or {}
     if not isinstance(cam, dict):
         errs.append(f"{w}.camera: must be an object")
@@ -174,6 +202,8 @@ def _check_free(errs: list, w: str, s: dict, reg: dict, passage: str | None) -> 
                        ("lens", LENSES)):
         if cam.get(k) is not None:
             _enum(errs, f"{w}.camera.{k}", cam[k], allowed)
+    if cam.get("azimuth") is not None and not isinstance(cam["azimuth"], (int, float)):
+        errs.append(f"{w}.camera.azimuth: must be a number of degrees")
     people = s.get("people") or []
     if not isinstance(people, list):
         errs.append(f"{w}.people: must be a list")
@@ -208,6 +238,8 @@ def validate(plan: dict, passage: str | None = None, target_seconds: float | Non
         errs.append(f"plan.location: {plan['location']!r} unknown; use one of the listed locations")
     if plan.get("grade") is not None:
         _enum(errs, "plan.grade", plan["grade"], GRADES)
+    if plan.get("still_model") is not None:
+        _enum(errs, "plan.still_model", plan["still_model"], list(STILL_MODELS))
     reg = castmod.registry(plan.get("cast"))
     shots = plan["shots"]
     if not isinstance(shots, list) or not shots:
@@ -216,7 +248,7 @@ def validate(plan: dict, passage: str | None = None, target_seconds: float | Non
     for i, s in enumerate(shots):
         w = f"shots[{i}]"
         if shot_mode(s) == "free":
-            words += _check_free(errs, w, s, reg, passage)
+            words += _check_free(errs, w, s, reg, passage, DIRECTED_CAP if plan.get("directed") else None)
             continue
         if shot_mode(s) != "clay":
             errs.append(f"{w}.mode: {s.get('mode')!r} is not one of {MODES}")
@@ -230,7 +262,8 @@ def validate(plan: dict, passage: str | None = None, target_seconds: float | Non
             continue
         narr = (s.get("narration") or "").strip()
         words += len(narr.split())
-        cap = 34 if passage is not None else 22  # an author's long sentence cannot be split
+        # a plan written by a director stage sets its own cap (one H3 clip, 15.1 s at 2.4 words/s)
+        cap = plan.get("shot_word_cap") or (34 if passage is not None else 22)
         if len(narr.split()) > cap:
             errs.append(f"{w}.narration: {len(narr.split())} words is too long for one shot; "
                         f"keep it under {cap}" + ("" if passage is not None else " or split it into two shots"))
@@ -451,7 +484,12 @@ def compile_plan(plan: dict, piece: Path) -> dict:
                 "motion": s["motion"], "move_target": s.get("move_target", ""),
                 "soundscape": s.get("soundscape", ""), "still_prompt": free_prompt(plan, s),
             }
-            for k in ("motion_prompt", "tail_s"):
+            for k in ("motion_prompt", "motion_plan", "tail_s", "refs", "ref_prompt", "video_path", "music",
+                      "end_crop", "end"):
+                if s.get(k):
+                    row[k] = s[k]
+            # a directed plan carries the director's own relation and register; others stay literal
+            for k in ("relation", "register"):
                 if s.get(k):
                     row[k] = s[k]
             shots.append(row)
@@ -465,6 +503,11 @@ def compile_plan(plan: dict, piece: Path) -> dict:
             roko["placement"] = cam["frame"]
         job = {"sid": f"s{i:03d}", "location": loc, "people": [_people_line(p, reg) for p in people]}
         scale = FIGURE_SCALE.get(cam["distance"], "")
+        # A placement that already sets the lead's scale or depth wins: "large in the frame" appended
+        # to "small, deep in the lit doorway" put the RV friend outside the trailer (2026-10-11).
+        if people and re.search(r"\b(small|tiny|far|distant|deep|background|edge|shoulder|silhouette)\b",
+                                people[0].get("placement", ""), re.I):
+            scale = ""
         if people and scale:
             job["people"][0]["placement"] += f", {scale}"
         if people:
@@ -484,6 +527,9 @@ def compile_plan(plan: dict, piece: Path) -> dict:
                     "figureAt": roko.get("figureAt"), "figureYaw": roko.get("figureYaw", 0),
                     "extraFigures": roko.get("extraFigures", []),
                     "emptySubject": roko.get("emptySubject")})
+        if cam.get("azimuth") is not None:
+            job["azimuth"] = float(cam["azimuth"])
+            roko["azimuth"] = float(cam["azimuth"])
         job_shots.append(job)
         beats.append(s["narration"].strip())
         shots.append({
@@ -495,7 +541,7 @@ def compile_plan(plan: dict, piece: Path) -> dict:
             "motion": s["motion"], "move_target": s.get("move_target", ""),
             "soundscape": s.get("soundscape", ""),
         })
-        for k in ("still_prompt", "motion_prompt", "tail_s"):
+        for k in ("still_prompt", "motion_prompt", "motion_plan", "tail_s", "video_path", "music", "end_crop", "end"):
             if s.get(k):
                 shots[-1][k] = s[k]
     if plan.get("motion_style"):
@@ -510,6 +556,14 @@ def compile_plan(plan: dict, piece: Path) -> dict:
         cfg["voice_ref"] = plan["voice_ref"]
     if plan.get("style"):
         cfg["style"] = plan["style"]
+    if plan.get("direction_hash"):
+        cfg["direction_hash"] = plan["direction_hash"]
+    if plan.get("style_bible"):   # read by animate_shots.prompt_for via prompt_profile
+        cfg["style_bible"] = plan["style_bible"]
+    if "end_frames" in plan:   # false: H3 runs first-frame only (end frames pulsed, 2026-10-04 A/B)
+        cfg["end_frames"] = bool(plan["end_frames"])
+    if plan.get("still_model"):   # read by stages.still_model
+        cfg["still_model"] = plan["still_model"]
     wr = lambda name, obj: (piece / name).write_text(json.dumps(obj, indent=1, ensure_ascii=False),
                                                      encoding="utf-8")
     wr("beats.json", beats)

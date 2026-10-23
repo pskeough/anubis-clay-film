@@ -174,12 +174,15 @@
       </div>
       <div class="row" style="margin-top:8px">
         <label class="small" title="Record one shot at a time. The take stops itself at the end of the shot and the picture holds on the next one until you press R. Redo a shot by going back to it ([) and pressing R; the newest take of a shot wins."><input type="checkbox" id="step"> <b>Shot by shot</b></label>
+        <label class="small" id="rollWrap" title="Shot by shot, hands free: after each shot saves, the next shot starts recording by itself after the count-in. P (or Space while recording) pauses after the shot you are on; R picks up again. Esc stops right now."><input type="checkbox" id="roll"> keep rolling</label>
+        <button id="bPause" class="sm" title="Finish this shot, then hold (P)" hidden>⏸ Pause after this shot</button>
+        <button id="bNextTodo" class="sm" title="Jump to the first line with no take at this speed (N)">⤳ next unrecorded</button>
         <span class="sep"></span>
         <label class="small muted" id="fromWrap">From
           <select id="from">
-            <option value="start">the start</option>
-            <option value="shot">this shot</option>
+            <option value="shot">this line</option>
             <option value="head">the playhead</option>
+            <option value="start">the start</option>
           </select></label>
         <label class="small muted" title="Start the picture this early so you can feel the pace coming in. The take only replaces audio from the punch point on.">pre-roll
           <select id="preroll"><option>0</option><option>1</option><option selected>2</option><option>3</option></select> s</label>
@@ -244,7 +247,7 @@
     </div>
 
     <div class="keys">
-      <kbd>Space</kbd> play/pause · <kbd>R</kbd> record/stop · <kbd>Esc</kbd> stop · <kbd>[</kbd> <kbd>]</kbd> shots · <kbd>L</kbd> loop shot · <kbd>G</kbd> guide · <kbd>-</kbd> <kbd>=</kbd> speed · <kbd>S</kbd> shot by shot · <kbd>Home</kbd> start · click any word to jump there
+      <kbd>Space</kbd> play/pause · <kbd>R</kbd> record/stop · <kbd>Esc</kbd> stop · <kbd>[</kbd> <kbd>]</kbd> shots · <kbd>L</kbd> loop shot · <kbd>G</kbd> guide · <kbd>-</kbd> <kbd>=</kbd> speed · <kbd>S</kbd> shot by shot · <kbd>P</kbd> pause after this shot · <kbd>N</kbd> next unrecorded · <kbd>Home</kbd> start · click any word to jump there
     </div>
   </div>
 
@@ -285,6 +288,30 @@ const S = {
 const fmt = (t) => { t = Math.max(0, t || 0); const m = Math.floor(t / 60); return `${m}:${(t - m * 60).toFixed(1).padStart(4, "0")}`; };
 const status = (msg, cls = "") => { const el = $("#status"); el.className = "status small " + cls; el.textContent = msg; };
 const sameRate = (t) => Math.abs((t.rate || 1) - S.rate) < 1e-3;
+/* shots that have something to read, and which of them already have a take at this speed (18 Oct 2026) */
+const spoken = (k) => S.words.some((w) => w.scene === k);
+const recordedShots = () => new Set((S.data?.takes || []).filter(sameRate).map((t) => t.shot).filter(Boolean));
+function nextSpoken(k) { for (let j = k; j < S.scenes.length; j++) if (spoken(j)) return j; return -1; }
+function firstUnrecorded(from = 0) {
+  const done = recordedShots();
+  for (let j = from; j < S.scenes.length; j++) if (spoken(j) && !done.has(S.scenes[j].id)) return j;
+  return -1;
+}
+function gotoUnrecorded(quiet) {
+  if (S.rec || !S.scenes.length) return;
+  const k = firstUnrecorded(0);
+  if (k < 0) { if (!quiet) status("Every line has a take at this speed. Build when ready.", "good"); return; }
+  seek(S.scenes[k].shot_start);
+  if ($("#step").checked) showHold(k);
+  const left = S.scenes.filter((sc, j) => spoken(j) && !recordedShots().has(sc.id)).length;
+  status(`${S.scenes[k].id}: first line with no take yet (${left} to go). R to record.`, "muted");
+}
+function setPauseReq(on) {
+  S.pauseReq = on;
+  const b = $("#bPause");
+  b.textContent = on ? "⏸ pausing after this shot… (P to cancel)" : "⏸ Pause after this shot";
+  b.classList.toggle("primary", on);
+}
 
 /* ---------------- piece loading ---------------- */
 async function api(path, opts) {
@@ -326,6 +353,10 @@ async function loadPiece(name) {
   S.loop = null; $("#bLoop").classList.remove("primary");
   setRate(store.get("rate." + name, 1), true);
   renderBuilds();
+  if ($("#step").checked) {
+    const go = () => { if (S.piece === name) gotoUnrecorded(true); };
+    if (vid.readyState >= 1) go(); else vid.addEventListener("loadedmetadata", go, { once: true });
+  }
 }
 
 /* ---------------- speed ---------------- */
@@ -789,10 +820,11 @@ async function startRecording() {
   vid.play().catch((e) => { status("Could not start the picture: " + e.message, "bad"); stopRecording(); });
 }
 
-function stopRecording() {
+function stopRecording(manual) {
   const rec = S.rec;
   if (!rec || rec.stopping) return;
   rec.stopping = true;
+  if (manual === true && rec.step && rec.stopAt !== null && vid.currentTime < rec.stopAt - 0.05) rec.stoppedEarly = true;
   if (rec.frameAtStart === null) rec.cancelled = true;
   $("#count").hidden = true;
   vid.pause();
@@ -833,11 +865,17 @@ async function finishTake(rec) {
     renderTakes(); renderStrip(); renderScript(); S.lastKey = ""; S.lastLineTop = -1;
     const worst = (meta.tips || []).find(([c]) => c === "bad") || (meta.tips || []).find(([c]) => c === "warn");
     if (rec.step) {
-      const nk = rec.shotIdx + 1;
-      if (nk < S.scenes.length) {
+      const nk = nextSpoken(rec.shotIdx + 1);          // shots with nothing to read are skipped
+      const rolling = $("#roll").checked && !S.pauseReq && !rec.stoppedEarly;
+      const paused = S.pauseReq || rec.stoppedEarly;
+      setPauseReq(false);
+      if (nk >= 0) {
         vid.currentTime = S.scenes[nk].shot_start;
         showHold(nk);
-        status(`${rec.shot} saved. Holding on ${S.scenes[nk].id}: read it, then R. To redo ${rec.shot}, press [ then R.` + (worst ? " " + worst[1] : ""), worst ? worst[0] : "good");
+        if (rolling) {
+          status(`${rec.shot} saved. Rolling on to ${S.scenes[nk].id}. P to pause after it.` + (worst ? " " + worst[1] : ""), worst ? worst[0] : "good");
+          setTimeout(() => { if (!S.rec && !S.pauseReq && $("#roll").checked) startRecording(); else if (S.pauseReq) { setPauseReq(false); status(`Paused on ${S.scenes[nk].id}. R to carry on.`, "muted"); } }, 400);
+        } else status(`${rec.shot} saved.${paused ? " Paused." : ""} Holding on ${S.scenes[nk].id}: read it, then R. To redo ${rec.shot}, press [ then R.` + (worst ? " " + worst[1] : ""), worst ? worst[0] : "good");
       } else status(`${rec.shot} saved. That was the last shot; build when ready.` + (worst ? " " + worst[1] : ""), worst ? worst[0] : "good");
     } else {
       status(`Saved ${meta.id} (${fmt(meta.range_start)}–${fmt(meta.video_end)}, ${meta.capture}). Press ▶ review to check sync.` + (worst ? " " + worst[1] : ""), worst ? worst[0] : "good");
@@ -969,7 +1007,9 @@ $("#bNext").onclick = () => jumpShot(1);
 $("#bLoop").onclick = toggleLoop;
 $("#bMic").onclick = () => enableMic(store.get("device", "") || undefined);
 $("#bCheck").onclick = micCheck;
-$("#bRec").onclick = () => (S.rec ? stopRecording() : startRecording());
+$("#bRec").onclick = () => (S.rec ? stopRecording(true) : startRecording());
+$("#bPause").onclick = () => setPauseReq(!S.pauseReq);
+$("#bNextTodo").onclick = () => gotoUnrecorded();
 $("#bBuild").onclick = buildMp4;
 $("#bOpen").onclick = () => S.piece && api(`/api/open/${encodeURIComponent(S.piece)}`, { method: "POST" }).catch((e) => status(e.message, "bad"));
 $("#help").addEventListener("toggle", () => { if ($("#help").open) diag(); });
@@ -983,15 +1023,21 @@ $("#nudge").oninput = showNudge; showNudge();
 const persist = (id, key, def, prop = "value") => { const el = $(id); el[prop] = store.get(key, def); el.addEventListener("change", () => store.set(key, el[prop])); };
 persist("#guideOn", "guideOn", true, "checked");
 persist("#guideRec", "guideRec", false, "checked");
-persist("#from", "from", "start");
+persist("#from", "from2", "shot");     // 21 Oct: was "start", which sent every take back to 0:00; new key drops the stored value
 persist("#preroll", "preroll", "2");
 persist("#countin", "countin", "2");
 persist("#hear", "hear", "broadcast");
 persist("#preset", "preset", "broadcast");
 persist("#motion", "motion", "blend");
 persist("#step", "step", false, "checked");
+persist("#roll", "roll", false, "checked");
 $("#guideVol").value = store.get("guideVol", 0.8); $("#guideVol").oninput = () => store.set("guideVol", +$("#guideVol").value);
-const stepUI = () => { $("#fromWrap").hidden = $("#step").checked; if (!$("#step").checked) hideHold(); else if (S.data && vid.paused) showHold(shotAt(vid.currentTime + 1e-3)); };
+const stepUI = () => {
+  const st = $("#step").checked;
+  $("#fromWrap").hidden = st; $("#rollWrap").hidden = !st; $("#bPause").hidden = !(st && $("#roll").checked);
+  if (!st) { hideHold(); setPauseReq(false); } else if (S.data && vid.paused && !S.rec) showHold(shotAt(vid.currentTime + 1e-3));
+};
+$("#roll").addEventListener("change", stepUI);
 $("#step").addEventListener("change", stepUI); stepUI();
 $("#hear").addEventListener("change", () => { if (S.review) { const t = S.review; stopReview(); vid.pause(); reviewTake(t); } });
 size();
@@ -999,9 +1045,11 @@ size();
 document.addEventListener("keydown", (e) => {
   if (e.target.matches("input[type=number], input[type=text], select") || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key;
-  if (k === " ") { e.preventDefault(); if (!S.rec) togglePlay(); }
-  else if (k === "r" || k === "R") { e.preventDefault(); S.rec ? stopRecording() : startRecording(); }
-  else if (k === "Escape") { if (S.rec) stopRecording(); else { vid.pause(); stopReview(); } }
+  if (k === " ") { e.preventDefault(); if (!S.rec) togglePlay(); else if (S.rec.step) setPauseReq(!S.pauseReq); }
+  else if (k === "r" || k === "R") { e.preventDefault(); S.rec ? stopRecording(true) : startRecording(); }
+  else if (k === "Escape") { if (S.rec) stopRecording(true); else { setPauseReq(false); vid.pause(); stopReview(); } }
+  else if (k === "p" || k === "P") { if ($("#step").checked) setPauseReq(!S.pauseReq); }
+  else if (k === "n" || k === "N") gotoUnrecorded();
   else if (k === "[") jumpShot(-1);
   else if (k === "]") jumpShot(1);
   else if (k === "l" || k === "L") toggleLoop();

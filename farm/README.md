@@ -37,11 +37,9 @@ independent shots and clips, which makes that the better shape anyway.
 
 ## Ports
 
-8190 (GPU 0) and 8191 (GPU 1). **8188 is deliberately avoided.** Three other
-codebases assume sole ownership of it — `Roko_Analogue/pipeline/src/comfy.ts`,
-a local chat UI, and `Games\CivAI\LAUNCH_CIVAI.bat` — and the
-latter two will start ComfyUI themselves if nothing is listening. Sharing that
-port would mean three lifecycle owners for one process.
+8190 (GPU 0) and 8191 (GPU 1), and 8192 for the one worker that sees both
+cards. **8188, ComfyUI's default, is deliberately avoided**, so a ComfyUI you
+already run for other tools never collides with the farm.
 
 ## Usage
 

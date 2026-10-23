@@ -35,6 +35,8 @@ $ErrorActionPreference = 'Stop'
 
 $FarmDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $FarmPs1   = Join-Path $FarmDir 'farm.ps1'
+. (Join-Path $FarmDir 'envfile.ps1')
+Import-RepoEnv (Join-Path (Split-Path -Parent $FarmDir) '.env')   # the repo-root .env; the shell wins
 $LlmScript = $env:CLAY_FILM_LLM_SCRIPT  # optional: a script that starts/stops a local LLM sharing the GPUs
 
 # A card is considered free below this. The 27B sits at ~13 GB per card, so

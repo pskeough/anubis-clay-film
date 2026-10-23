@@ -117,8 +117,54 @@ def frames_for(seconds: float, shot: dict | None = None,
     return max(MIN_FRAMES, min(cap, n))
 
 
-def prompt_for(shot: dict, scene_chars: int = SCENE_CHARS) -> str:
-    """The shipped template's prompt shape, via h3_prompt.i2va.
+# The lock names no body part. The first version said "simplified painted faces and hands, mouths
+# closed": H3 read the nouns as content, painted two cartoon men into an empty underwater shot
+# (oceanus s036) and cut to a close-up of hands (s038), 2026-10-03.
+STYLE_LOCK = ("every frame a painting, never photographic, the brush texture stays the same from the "
+              "first frame to the last")
+LOCK_PEOPLE = "the figures stay loose painted figures and do not speak"
+LOCK_EMPTY = "no people or figures appear at any point"
+# No scenery nouns here either: "the water and sky included" sent two interiors out to open sea
+# (oceanus s023 galley -> porthole view, s025 tavern -> table in the surf), 2026-10-03.
+HOLD = "Every frame stays a hand-painted image in the same strokes as image 1."
+
+
+def has_people(shot: dict) -> bool:
+    p = shot.get("people")
+    if isinstance(p, str):
+        return p.strip() not in ("", "[]")
+    return bool(p)
+
+
+def end_frame(piece: Path, sid: str) -> Path | None:
+    """The shot's painted last keyframe (the endframes stage writes it), if there is one."""
+    f = Path(piece) / "endframes" / f"{sid}.png"
+    return f if f.exists() else None
+
+
+PROFILE = "minimax_h3"   # prompt_profiles/<name>/profile.json; the model's own prompting guide as data
+
+
+def style_bible(piece: Path) -> dict | None:
+    """config.json style_bible (style / texture / prohibitions), if the piece has one."""
+    f = Path(piece) / "config.json"
+    if f.exists():
+        return json.loads(f.read_text(encoding="utf-8")).get("style_bible")
+    return None
+
+
+def prompt_for(shot: dict, scene_chars: int = SCENE_CHARS, end: bool = False,
+               seconds: float | None = None, bible: dict | None = None, check: bool = True) -> str:
+    """The H3 prompt for one shot.
+
+    With a style bible (config.json) the prompt is built by prompt_profile in the model's own
+    documented structure: alignment line, blank line, integrated_multimodal_description /
+    overall_soundscape / non_diegetic_music, style first in [Shot 1], texture and prohibition
+    blocks, camera grammar from the guide. It is linted against the profile's rules and a lint
+    failure raises, so a malformed prompt never reaches the GPU. Without a bible the legacy
+    free-paragraph template below is used unchanged (older pieces).
+
+    Legacy notes: the shipped template's prompt shape, via h3_prompt.i2va.
 
     There is no longer a move-strength dial. `MOVE_STRENGTH` existed because
     Wan would not move and the fix was to shout the camera clause louder; on
@@ -131,12 +177,29 @@ def prompt_for(shot: dict, scene_chars: int = SCENE_CHARS) -> str:
     repeated here: the still already looks the way it looks, and restating
     palette and grain spends tokens the action needs.
     """
+    if bible:
+        import prompt_profile as pp
+        prof = pp.load(PROFILE)
+        ctx = {"mode": "fl2va" if end else "i2va", "seconds": seconds or 5.0, "style_bible": bible}
+        text = pp.build(prof, shot, ctx)
+        if check:
+            bad = pp.lint(prof, text, ctx)
+            if bad:
+                raise ValueError(f"prompt for shot {shot.get('i')} fails {PROFILE} lint: " + "; ".join(bad))
+        return text
     scene = clean_scene(shot["scene"])
     # drop a leading framing clause; the still already fixed the framing
     body = scene.split(". ", 1)[-1] if scene.count(". ") else scene
     # A drawn or painted piece sets motion_style; the i2va default ("Live-action cinematic
     # film") would otherwise ask H3 to turn every frame into photography.
-    kw = {"style": shot["motion_style"]} if shot.get("motion_style") else {}
+    # Style lock (2026-10-03): on a painted piece H3 turned close-ups and newly revealed ground
+    # photographic within the clip. The look is restated in the style line and again after the
+    # action, and a painted last keyframe (end=True) gives the clip a painting to land on.
+    kw = {}
+    if shot.get("motion_style"):
+        who = LOCK_PEOPLE if has_people(shot) else LOCK_EMPTY
+        kw = {"style": f"{shot['motion_style'].rstrip('. ')}; {STYLE_LOCK}; {who}", "hold": HOLD,
+              "soundscape": shot.get("soundscape") or "quiet room tone"}
     return h3_prompt.i2va(
         body[:scene_chars],
         shot.get("motion") or "a slow forward push into the frame",
@@ -144,8 +207,8 @@ def prompt_for(shot: dict, scene_chars: int = SCENE_CHARS) -> str:
         subject=shot.get("grounded_in") or "the subject",
         action=shot.get("action", ""),
         shots=shot.get("cuts") or None,
-        soundscape=shot.get("soundscape", ""),
-        move_target=shot.get("move_target", ""))
+        move_target=shot.get("move_target", ""), end_frame=end,
+        **({"soundscape": shot.get("soundscape", "")} if "soundscape" not in kw else {}))
 
 
 def find_ffmpeg() -> str | None:
@@ -255,6 +318,7 @@ def main() -> int:
     ap.add_argument("--steps", type=int, default=STEPS)
     ap.add_argument("--max-frames", type=int, default=MAX_FRAMES)
     ap.add_argument("--no-gate", action="store_true")
+    ap.add_argument("--no-end", action="store_true", help="ignore endframes/ (first-frame-only H3)")
     ap.add_argument("--scene-chars", type=int, default=SCENE_CHARS)
     # Sol-Attn. 305 s against ~465 s dense on the same clip, motion and detail
     # unchanged. tau is in score-distribution sigmas and higher is sparser;
@@ -301,19 +365,31 @@ def main() -> int:
         n = frames_for(dur.get(i, 5.0), s, a.max_frames)
         total_frames += n
         cuts = s.get("cuts") or []
-        prompt = prompt_for(s, a.scene_chars)
+        # a painted last keyframe pins the clip's end; its name must differ from the still's
+        # because both go to the worker's input dir
+        end = None if (a.no_end or cuts) else end_frame(piece, sid)
+        inputs = [still]
+        if end:
+            last = piece / "endframes" / f"{sid}_end.png"
+            if not last.exists() or last.stat().st_mtime < end.stat().st_mtime:
+                import shutil
+                shutil.copy2(end, last)
+            inputs.append(last)
+        prompt = s.get("motion_prompt") or prompt_for(
+            s, a.scene_chars, end=bool(end), seconds=n / FPS, bible=style_bible(piece))
         jobs.append(Job(
-            job_id=sid, model_key="minimax_h3", out_name=sid, inputs=[still],
+            job_id=sid, model_key="minimax_h3", out_name=sid, inputs=inputs,
             graph=graphs.minimax_h3_official(
                 prompt, still.name, width=a.width, height=a.height,
                 seconds=n / FPS, fps=FPS, steps=a.steps, seed=SEED + i,
                 sparse=None if a.no_sparse else {"tau": a.tau,
                                                  "start_percent": 0.2},
+                last_image=inputs[1].name if end else None,
                 prefix=f"{piece.name}_{sid}"),
             meta={"frames": n, "seconds": round(n / FPS, 2),
                   "want": dur.get(i), "motion": s.get("motion"),
                   "action": s.get("action"), "cuts": len(cuts),
-                  "prompt": prompt}))
+                  "end_frame": bool(end), "prompt": prompt}))
 
     shots_total = len(jobs) + sum(j.meta["cuts"] for j in jobs)
     print(f"\n=== {piece.name}: {len(jobs)} renders carrying {shots_total} "

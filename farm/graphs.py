@@ -181,17 +181,60 @@ def zimage_depth_control(prompt: str, depth_image: str,
 # reference images (image_1 is the edit target/canvas). Prompts are written
 # per QWEN_IMAGE_2.1_PROMPTING.md (observe-don't-instruct; <imageN> tags for
 # N>=2). Width/height must be multiples of 32.
+#
+# Qwen-Image-2.1-Turbo (official, 2026-10-09) is the same architecture distilled
+# to 8 steps at cfg 1; text encoder and VAE are shared with the base. `variant`
+# picks the transformer and the sampler:
+#   base          qwen21_unet, KSampler euler/simple, `steps` as given
+#   turbo         qwen21_turbo_unet, euler on the 8 sample_sigmas saved in the
+#                 turbo's model_index.json (diffusers' default for it)
+#   turbo_simple  qwen21_turbo_unet, KSampler euler/simple at 8 steps
+# Turbo variants ignore `steps`: the card says the saved schedule is the only one
+# evaluated. Bench 2026-10-10 (one 5060 Ti, 1024^2, qwen21_turbo_bench/): same
+# prompt 26.4 s base vs 10.9 s turbo, new prompt 40.5 s vs 27.7 s.
+QWEN21_VARIANTS = ("base", "turbo", "turbo_simple")
+QWEN21_TURBO_SIGMAS = ("1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, "
+                       "0.704534, 0.414568, 0.0")
+QWEN21_TURBO_STEPS = 8
+
+
+def _qwen21_unet(g: G, variant: str) -> str:
+    if variant not in QWEN21_VARIANTS:
+        raise ValueError(f"qwen21 variant {variant!r}: use one of {QWEN21_VARIANTS}")
+    key = "qwen21_unet" if variant == "base" else "qwen21_turbo_unet"
+    return g.add("UNETLoader", {"unet_name": C.MODELS[key], "weight_dtype": "default"})
+
+
+def _qwen21_sample(g: G, variant: str, model: str, pos: str, latent: list,
+                   seed: int, steps: int, cfg: float, denoise: float = 1.0) -> str:
+    """The sampler for a Qwen-2.1 graph; returns the node whose output 0 is the latent.
+    denoise < 1 is for a VAE-encoded latent only (the turbo path ignores it)."""
+    if variant == "turbo":
+        noise = g.add("RandomNoise", {"noise_seed": seed})
+        guider = g.add("BasicGuider", {"model": _link(model), "conditioning": _link(pos, 0)})
+        sampler = g.add("KSamplerSelect", {"sampler_name": "euler"})
+        sigmas = g.add("ManualSigmas", {"sigmas": QWEN21_TURBO_SIGMAS})
+        return g.add("SamplerCustomAdvanced", {
+            "noise": _link(noise), "guider": _link(guider), "sampler": _link(sampler),
+            "sigmas": _link(sigmas), "latent_image": latent})
+    if variant == "turbo_simple":
+        steps, cfg = QWEN21_TURBO_STEPS, 1.0
+    return g.add("KSampler", {
+        "model": _link(model), "positive": _link(pos, 0), "negative": _link(pos, 1),
+        "latent_image": latent, "seed": seed, "steps": steps, "cfg": cfg,
+        "sampler_name": "euler", "scheduler": "simple", "denoise": float(denoise)})
+
+
 def qwen21_t2i(prompt: str, width: int = 1024, height: int = 1024,
                steps: int = 25, cfg: float = 1.0, resolution: int = 1024,
                seed: int = 31337, negative: str = "",
-               prefix: str = "qwen21") -> dict:
+               prefix: str = "qwen21", variant: str = "base") -> dict:
     """Qwen-Image-2.1 text-to-image. No cache node (the t2i template has none)."""
     width = max(32, (width + 31) // 32 * 32)
     height = max(32, (height + 31) // 32 * 32)
 
     g = G()
-    unet = g.add("UNETLoader", {
-        "unet_name": C.MODELS["qwen21_unet"], "weight_dtype": "default"})
+    unet = _qwen21_unet(g, variant)
     clip = g.add("CLIPLoader", {
         "clip_name": C.MODELS["qwen21_clip"], "type": "qwen_image"})
     vae = g.add("VAELoader", {"vae_name": C.MODELS["qwen21_vae"]})
@@ -203,11 +246,40 @@ def qwen21_t2i(prompt: str, width: int = 1024, height: int = 1024,
         "negative_prompt": negative, "vae": _link(vae),
         "resolution": int(resolution)})
 
+    k = _qwen21_sample(g, variant, unet, pos, _link(latent), seed, steps, cfg)
+
+    dec = g.add("VAEDecode", {"samples": _link(k), "vae": _link(vae)})
+    g.add("SaveImage", {"images": _link(dec), "filename_prefix": prefix})
+    return g.out()
+
+
+def qwen21_img2img(prompt: str, image: str, denoise: float = 0.5,
+                   steps: int = 25, cfg: float = 1.0, seed: int = 31337, negative: str = "",
+                   prefix: str = "qwen21i", variant: str = "base") -> dict:
+    """Qwen-Image-2.1 img2img: VAE-encode `image`, re-noise to `denoise`, sample from text only.
+
+    The encoder sees no image here. Every qwen21_edit of a photograph came back relit and
+    over-sharpened (contrast x1.3-1.4, detail x2.3-2.9, all variants and step counts, cache off
+    too; gardening_2min 2026-10-10), while t2i from the same encoder is clean. This keeps the
+    still's composition by latent instead of by the encoder's image path.
+    """
+    if variant == "turbo":
+        raise ValueError("qwen21_img2img: the turbo ManualSigmas start at 1.0; use turbo_simple or base")
+    g = G()
+    unet = _qwen21_unet(g, variant)
+    clip = g.add("CLIPLoader", {"clip_name": C.MODELS["qwen21_clip"], "type": "qwen_image"})
+    vae = g.add("VAELoader", {"vae_name": C.MODELS["qwen21_vae"]})
+    img = g.add("LoadImage", {"image": image})
+    lat = g.add("VAEEncode", {"pixels": _link(img), "vae": _link(vae)})
+    pos = g.add("TextEncodeQwenImage21", {
+        "clip": _link(clip), "prompt": prompt, "negative_prompt": negative,
+        "vae": _link(vae), "resolution": 1024})
+    if variant == "turbo_simple":
+        steps, cfg = QWEN21_TURBO_STEPS, 1.0
     k = g.add("KSampler", {
         "model": _link(unet), "positive": _link(pos, 0), "negative": _link(pos, 1),
-        "latent_image": _link(latent), "seed": seed, "steps": steps, "cfg": cfg,
-        "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0})
-
+        "latent_image": _link(lat), "seed": seed, "steps": steps, "cfg": cfg,
+        "sampler_name": "euler", "scheduler": "simple", "denoise": float(denoise)})
     dec = g.add("VAEDecode", {"samples": _link(k), "vae": _link(vae)})
     g.add("SaveImage", {"images": _link(dec), "filename_prefix": prefix})
     return g.out()
@@ -217,7 +289,7 @@ def qwen21_edit(prompt: str, refs: list[str],
                 steps: int = 25, cfg: float = 1.0, resolution: int = 1024,
                 seed: int = 31337, negative: str = "",
                 cache_device: str = "auto", cache_dtype: str = "default",
-                prefix: str = "qwen21e") -> dict:
+                prefix: str = "qwen21e", variant: str = "base") -> dict:
     """Qwen-Image-2.1 instruction edit.
 
     refs: 1-10 image filenames already uploaded to the worker's input dir.
@@ -235,8 +307,7 @@ def qwen21_edit(prompt: str, refs: list[str],
         raise ValueError(f"qwen21_edit takes 1-10 reference images, got {len(refs)}")
 
     g = G()
-    unet = g.add("UNETLoader", {
-        "unet_name": C.MODELS["qwen21_unet"], "weight_dtype": "default"})
+    unet = _qwen21_unet(g, variant)
     clip = g.add("CLIPLoader", {
         "clip_name": C.MODELS["qwen21_clip"], "type": "qwen_image"})
     vae = g.add("VAELoader", {"vae_name": C.MODELS["qwen21_vae"]})
@@ -254,11 +325,57 @@ def qwen21_edit(prompt: str, refs: list[str],
         inputs[f"images.image_{i}"] = _link(node)
     pos = g.add("TextEncodeQwenImage21", inputs)
 
-    k = g.add("KSampler", {
-        "model": _link(cache), "positive": _link(pos, 0), "negative": _link(pos, 1),
-        "latent_image": _link(pos, 2), "seed": seed, "steps": steps, "cfg": cfg,
-        "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0})
+    k = _qwen21_sample(g, variant, cache, pos, _link(pos, 2), seed, steps, cfg)
 
+    dec = g.add("VAEDecode", {"samples": _link(k), "vae": _link(vae)})
+    g.add("SaveImage", {"images": _link(dec), "filename_prefix": prefix})
+    return g.out()
+
+
+def qwen21_inpaint(prompt: str, plate: str, mask: str, ref: str | None = "",
+                   steps: int = 25, cfg: float = 1.0, resolution: int = 1024,
+                   seed: int = 31337, negative: str = "", diff_strength: float = 1.0,
+                   cache_device: str = "auto", cache_dtype: str = "default",
+                   prefix: str = "qwen21m", variant: str = "base",
+                   extra_refs: list[str] | None = None, denoise: float = 1.0) -> dict:
+    """Qwen-Image-2.1 edit confined to a mask: the two-pass still's second pass.
+
+    extra_refs: further images for the encoder as image_2.. (e.g. an identity portrait for a
+    face repair). denoise < 1 keeps the plate's structure inside the mask (head pose, outline).
+
+    plate: the frame to paint into, uploaded; also image_1, so the encoder sees the whole room.
+    mask: a greyscale image, white where the new content goes (read from its red channel).
+    ref: image_1 for the encoder. "" uses the plate; None sends no image (text-only inpaint, no
+    cache node, as on the t2i path); a filename sends that image instead, e.g. the plate with a
+    stand-in figure drawn where the person goes. With the bare plate as image_1 the edit model
+    copied the empty chair back into the mask (gardening p01 s005, 2026-10-11).
+
+    The encoder's third output is an EMPTY latent (zeros at image_1's size), so a masked edit
+    cannot use it: SetLatentNoiseMask on zeros paints the unmasked area black. The plate is
+    VAE-encoded instead, and the sampler keeps every pixel outside the mask. DifferentialDiffusion
+    lets a feathered mask edge blend instead of cutting. The plate must already be at the
+    encoder's size for `resolution` (1344x768 for a 16:9 frame at 1024), or the masked region
+    is painted against a shifted context.
+    """
+    g = G()
+    unet = _qwen21_unet(g, variant)
+    clip = g.add("CLIPLoader", {"clip_name": C.MODELS["qwen21_clip"], "type": "qwen_image"})
+    vae = g.add("VAELoader", {"vae_name": C.MODELS["qwen21_vae"]})
+    model = g.add("DifferentialDiffusion", {"model": _link(unet), "strength": float(diff_strength)})
+    if ref is not None:
+        model = g.add("QwenImage21Cache", {"model": _link(model), "device": cache_device, "dtype": cache_dtype})
+    img = g.add("LoadImage", {"image": plate})
+    m = g.add("LoadImageMask", {"image": mask, "channel": "red"})
+    lat = g.add("VAEEncode", {"pixels": _link(img), "vae": _link(vae)})
+    masked = g.add("SetLatentNoiseMask", {"samples": _link(lat), "mask": _link(m)})
+    enc = {"clip": _link(clip), "prompt": prompt, "negative_prompt": negative,
+           "vae": _link(vae), "resolution": int(resolution)}
+    if ref is not None:
+        enc["images.image_1"] = _link(g.add("LoadImage", {"image": ref}) if ref else img)
+        for i, r in enumerate(extra_refs or [], start=2):
+            enc[f"images.image_{i}"] = _link(g.add("LoadImage", {"image": r}))
+    pos = g.add("TextEncodeQwenImage21", enc)
+    k = _qwen21_sample(g, variant, model, pos, _link(masked), seed, steps, cfg, denoise)
     dec = g.add("VAEDecode", {"samples": _link(k), "vae": _link(vae)})
     g.add("SaveImage", {"images": _link(dec), "filename_prefix": prefix})
     return g.out()
@@ -408,7 +525,10 @@ REQUIRED_NODES = {
     "qwen21_edit": ["UNETLoader", "CLIPLoader", "VAELoader", "TextEncodeQwenImage21",
                     "QwenImage21Cache", "LoadImage", "KSampler", "VAEDecode",
                     "SaveImage"],
-    "wan_i2v": ["UnetLoaderGGUF", "ModelSamplingSD3", "CLIPTextEncode",
+    "qwen21_inpaint": ["DifferentialDiffusion", "LoadImageMask", "VAEEncode", "SetLatentNoiseMask"],
+    "qwen21_turbo":["RandomNoise", "BasicGuider", "KSamplerSelect", "ManualSigmas",
+                     "SamplerCustomAdvanced"],
+    "wan_i2v":["UnetLoaderGGUF", "ModelSamplingSD3", "CLIPTextEncode",
                 "Wan22ImageToVideoLatent"],
 }
 
@@ -424,6 +544,7 @@ MODEL_ENUMS = {
     "qwen_lightning_4": ("LoraLoaderModelOnly", "lora_name"),
     "qwen_lightning_8": ("LoraLoaderModelOnly", "lora_name"),
     "qwen21_unet": ("UNETLoader", "unet_name"),
+    "qwen21_turbo_unet": ("UNETLoader", "unet_name"),
     "qwen21_clip": ("CLIPLoader", "clip_name"),
     "qwen21_vae": ("VAELoader", "vae_name"),
     "wan_unet": ("UnetLoaderGGUF", "unet_name"),
@@ -525,6 +646,7 @@ def minimax_h3_official(prompt: str, start_image: str, width: int = 1280,
                         sampler: str = "res_multistep",
                         scheduler: str = "simple",
                         last_image: str | None = None,
+                        guides: list | None = None,
                         distorch: dict | None = None,
                         sparse: dict | None = None,
                         prefix: str = "h3off") -> dict:
@@ -637,9 +759,30 @@ def minimax_h3_official(prompt: str, start_image: str, width: int = 1280,
         i2v_inputs["last_frame"] = _link(last)
     i2v = g.add("MiniMaxH3ImageToVideo", i2v_inputs)
 
+    # Mid-clip keyframes. With first and last pinned, long clips (9-12 s) still wandered in the
+    # middle on a painted piece: a tavern became a beach, a galley became a porthole view
+    # (oceanus s023/s025, 2026-10-03). Each (image, frame_idx) is anchored with AddGuide.
+    # A guide may also be a short clip, {"video": name, "frames": 22, "skip": 0, "idx": 0}: the tail of
+    # the previous clip anchored at frame 0 carries its motion into this one (a continuation, not a
+    # last-frame target). AddGuide crops a batch to 17k+5 frames (5, 22, 39 ...).
+    cond = _link(i2v, 0)
+    for gd in (guides or []):
+        if isinstance(gd, dict):
+            gi = g.add("VHS_LoadVideo", {
+                "video": gd["video"], "force_rate": int(fps), "custom_width": 0, "custom_height": 0,
+                "frame_load_cap": int(gd.get("frames", 22)), "skip_first_frames": int(gd.get("skip", 0)),
+                "select_every_nth": 1})
+            name_link, idx = _link(gi, 0), int(gd.get("idx", 0))
+        else:
+            name, idx = gd
+            name_link = _link(g.add("LoadImage", {"image": name}))
+        cond = _link(g.add("MiniMaxH3AddGuide", {
+            "positive": cond, "vae": _link(vae_node), "latent": _link(i2v, 1),
+            "image": name_link, "frame_idx": int(idx)}))
+
     noise = g.add("RandomNoise", {"noise_seed": seed})
     guider = g.add("BasicGuider", {"model": model,
-                                   "conditioning": _link(i2v, 0)})
+                                   "conditioning": cond})
     samp = g.add("KSamplerSelect", {"sampler_name": sampler})
     sig = g.add("BasicScheduler", {"model": model, "scheduler": scheduler,
                                    "steps": steps, "denoise": 1.0})
@@ -653,6 +796,137 @@ def minimax_h3_official(prompt: str, start_image: str, width: int = 1280,
         "images": _link(dec), "frame_rate": fps, "loop_count": 0,
         "filename_prefix": prefix, "format": "video/h264-mp4",
         "pingpong": False, "save_output": True})
+    return g.out()
+
+
+MULTIGPU_CLASSES = ("UNETLoaderDisTorch2MultiGPU",)
+
+
+def minimax_h3_single_gpu(prompt: str, start_image: str, **kw) -> dict:
+    """minimax_h3_official for ONE card of 24 GB or more (a rented pod, 2026-10-11).
+
+    The same weights, nodes and settings; the only difference allowed is the loader: the plain
+    UNETLoader, never ComfyUI-MultiGPU's DisTorch split, which needs a donor card the pod does not
+    have. Any `distorch` argument is dropped. As of this date clay_film's motion_one and
+    animate_shots already pass no distorch, so their graphs are byte-identical to this one; the
+    variant exists so a remote worker can never be sent a two-card graph by a later change.
+    """
+    kw.pop("distorch", None)
+    g = minimax_h3_official(prompt, start_image, distorch=None, **kw)
+    bad = [n["class_type"] for n in g.values() if n["class_type"] in MULTIGPU_CLASSES]
+    if bad:
+        raise ValueError(f"single-GPU H3 graph carries multi-GPU nodes: {bad}")
+    return g
+
+
+H3_CLIP = "qwen3vl32b_h3_nvfp4.safetensors"
+H3_VAE = "minimax_h3_video_vae_fp16.safetensors"
+H3_UNET_NVFP4 = "MiniMax_H3_FL2VA_pruned_nvfp4.safetensors"  # banned for renders: no camera motion, crunchy texture (MEASURED.md 18 Sep; Patrick 16 Oct)
+H3_UNET_INT8 = "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+
+
+def minimax_h3_encode(prompt: str, start_image: str | None, cond_path: str, width: int = 1344,
+                      height: int = 768, seconds: float = 5.17, fps: float = 24.0,
+                      last_image: str | None = None, guides: list | None = None,
+                      clip: str = H3_CLIP, vae: str = H3_VAE) -> dict:
+    """Split H3, step 1 of 2 (2026-10-15): the encoder half of minimax_h3_official, saved to cond_path.
+
+    Node for node the same MiniMaxH3ImageToVideo + MiniMaxH3AddGuide chain; instead of sampling, the positive
+    conditioning (text embedding plus every keyframe and guide latent) goes to SaveH3Conditioning
+    (custom_nodes/h3_cond_cache.py). One worker encodes a whole wave and is then /free'd, so the 15.7 GB
+    encoder is never resident beside a sampler. The AV latent is empty and is rebuilt by step 2."""
+    g = G()
+    clip_node = g.add("CLIPLoader", {"clip_name": clip, "type": "minimax"})
+    vae_node = g.add("VAELoader", {"vae_name": vae})
+    i2v_inputs = {"clip": _link(clip_node), "vae": _link(vae_node), "prompt": prompt,
+                  "width": width, "height": height, "length": h3_length(seconds, fps)}
+    if start_image:
+        i2v_inputs["first_frame"] = _link(g.add("LoadImage", {"image": start_image}))
+    if last_image:
+        i2v_inputs["last_frame"] = _link(g.add("LoadImage", {"image": last_image}))
+    i2v = g.add("MiniMaxH3ImageToVideo", i2v_inputs)
+    cond = _link(i2v, 0)
+    for gd in (guides or []):
+        if isinstance(gd, dict):
+            gi = g.add("VHS_LoadVideo", {
+                "video": gd["video"], "force_rate": int(fps), "custom_width": 0, "custom_height": 0,
+                "frame_load_cap": int(gd.get("frames", 22)), "skip_first_frames": int(gd.get("skip", 0)),
+                "select_every_nth": 1})
+            name_link, idx = _link(gi, 0), int(gd.get("idx", 0))
+        else:
+            name, idx = gd
+            name_link = _link(g.add("LoadImage", {"image": name}))
+        cond = _link(g.add("MiniMaxH3AddGuide", {
+            "positive": cond, "vae": _link(vae_node), "latent": _link(i2v, 1),
+            "image": name_link, "frame_idx": int(idx)}))
+    g.add("SaveH3Conditioning", {"conditioning": cond, "path": cond_path})
+    return g.out()
+
+
+def minimax_h3_generate(cond_path: str, width: int = 1344, height: int = 768, seconds: float = 5.17,
+                        fps: float = 24.0, seed: int = 424242, unet: str = H3_UNET_INT8,
+                        vae: str = H3_VAE,
+                        lora: str = "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+                        lora_strength: float = 1.0, steps: int = 6, sampler: str = "res_multistep",
+                        scheduler: str = "simple", prefix: str = "h3gen", control: dict | None = None,
+                        sparse: dict | None = None) -> dict:
+    """Split H3, step 2 of 2: minimax_h3_official's sampler half, reading step 1's conditioning file.
+    No text encoder is loaded. The latent comes from EmptyMiniMaxH3LatentAV, which builds exactly what
+    MiniMaxH3ImageToVideo returns (both call _empty_av_latent with the same size and length).
+
+    control (optional): the H3 Fun ControlNet Union 2.0 as a model patch, e.g. a clay depth pass,
+    {"patch": "MiniMax-H3-Fun-Controlnet-Union-2.0.safetensors", "video": "<uploaded mp4 or png>",
+     "strength": 0.6, "start_percent": 0.0, "end_percent": 0.6}. A png is a held control frame.
+
+    sparse (optional): BlockSparseAttention exactly as in minimax_h3_official, e.g. {"mode": "sol-attn"}. On
+    15 Oct a step cost 193 s at 243 frames and 465 s at 362 (1.5x frames, 2.4x time), so attention dominates."""
+    g = G()
+    unet_node = g.add("UNETLoader", {"unet_name": unet, "weight_dtype": "default"})
+    vae_node = g.add("VAELoader", {"vae_name": vae})
+    model = _link(unet_node)
+    if lora:
+        model = _link(g.add("LoraLoaderModelOnly", {"model": model, "lora_name": lora,
+                                                    "strength_model": lora_strength}))
+    if sparse:
+        mode = sparse.get("mode", "sol-attn")
+        sp = {"model": model, "selection": mode, "start_percent": sparse.get("start_percent", 0.2),
+              "end_percent": sparse.get("end_percent", 1.0), "dense_blocks": sparse.get("dense_blocks", ""),
+              "min_tokens": sparse.get("min_tokens", 12288), "extra_tokens": sparse.get("extra_tokens", 256),
+              "sink_conditioning": sparse.get("sink_conditioning", "exact_kv"),
+              "verbose": sparse.get("verbose", False)}
+        if mode == "sol-attn":
+            sp["selection.tau"] = sparse.get("tau", 1.3)
+        else:
+            sp["selection.keep_percent"] = sparse.get("keep_percent", 10.0)
+        model = _link(g.add("BlockSparseAttention", sp))
+    if control:
+        n = h3_length(seconds, fps)
+        if str(control["video"]).lower().endswith((".png", ".jpg")):
+            img = _link(g.add("LoadImage", {"image": control["video"]}))
+            cv = _link(g.add("RepeatImageBatch", {"image": img, "amount": n}))
+        else:
+            cv = _link(g.add("VHS_LoadVideo", {
+                "video": control["video"], "force_rate": int(fps), "custom_width": width, "custom_height": height,
+                "frame_load_cap": n, "skip_first_frames": 0, "select_every_nth": 1}), 0)
+        patch = g.add("ModelPatchLoader", {"name": control.get(
+            "patch", "MiniMax-H3-Fun-Controlnet-Union-2.0.safetensors")})
+        model = _link(g.add("MiniMaxH3FunControlNetApply", {
+            "model": model, "model_patch": _link(patch), "vae": _link(vae_node),
+            "strength": float(control.get("strength", 0.6)),
+            "start_percent": float(control.get("start_percent", 0.0)),
+            "end_percent": float(control.get("end_percent", 0.6)), "control_video": cv}))
+    cond = g.add("LoadH3Conditioning", {"path": cond_path})
+    lat = g.add("EmptyMiniMaxH3LatentAV", {"width": width, "height": height, "length": h3_length(seconds, fps)})
+    noise = g.add("RandomNoise", {"noise_seed": seed})
+    guider = g.add("BasicGuider", {"model": model, "conditioning": _link(cond)})
+    samp = g.add("KSamplerSelect", {"sampler_name": sampler})
+    sig = g.add("BasicScheduler", {"model": model, "scheduler": scheduler, "steps": steps, "denoise": 1.0})
+    k = g.add("SamplerCustomAdvanced", {"noise": _link(noise), "guider": _link(guider), "sampler": _link(samp),
+                                        "sigmas": _link(sig), "latent_image": _link(lat)})
+    dec = g.add("VAEDecode", {"samples": _link(k), "vae": _link(vae_node)})
+    g.add("VHS_VideoCombine", {"images": _link(dec), "frame_rate": fps, "loop_count": 0,
+                               "filename_prefix": prefix, "format": "video/h264-mp4",
+                               "pingpong": False, "save_output": True})
     return g.out()
 
 

@@ -30,8 +30,8 @@ async def main() -> int:
             bad["shots"][0]["camera"]["lens"] = 40
             er = await s.call_tool("validate_plan", {"plan_json": json.dumps(bad)})
             print("validate broken:", er.content[0].text)
-            loc = await s.call_tool("location", {"location_id": "dorm-room"})
-            print("dorm-room marks:", json.loads(loc.content[0].text)["marks"])
+            loc = await s.call_tool("location", {"location_id": "permit-office"})
+            print("permit-office marks:", json.loads(loc.content[0].text)["marks"])
     return 0
 
 

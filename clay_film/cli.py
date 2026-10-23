@@ -8,9 +8,11 @@
          --endpoint URL --model ID      write pieces/NAME/plan.json with a model
     new NAME PLAN.json                  validate and install a hand-written plan
     run NAME [--stages a,b] [--only s000,s003] [--seeds 1,2] [--force] [--keep-farm]
+             [--model base|turbo|turbo_simple]
     status NAME
-    shot NAME still|edit|motion|clay SID [--seed N] [--prompt TEXT] [--base V]
-                                        one shot; the output becomes a new active version
+    shot NAME still|edit|motion|clay SID [--seed N] [--prompt TEXT] [--base V] [--model ...]
+                                        one shot; the output becomes a new active version.
+                                        --model picks the Qwen-2.1 transformer (stages.still_model)
     versions NAME                       every shot's stills and clips, active ones and staleness
     activate NAME SID still|clip V      choose which version stills/ and clips/ carry
     selftest                            schema + marks + compile, no GPU
@@ -139,16 +141,24 @@ def main(argv=None) -> int:
     a = sub.add_parser("run"); a.add_argument("name"); a.add_argument("--stages"); a.add_argument("--only")
     a.add_argument("--seeds"); a.add_argument("--force", action="store_true"); a.add_argument("--keep-farm", action="store_true")
     a.add_argument("--device", type=int, default=0)
+    a.add_argument("--model", choices=schema.STILL_MODELS, help="Qwen-2.1 for stills/endframes (default: plan or base)")
     a = sub.add_parser("status"); a.add_argument("name")
     a = sub.add_parser("shot"); a.add_argument("name"); a.add_argument("op", choices=["still", "edit", "motion", "clay"])
     a.add_argument("sid"); a.add_argument("--seed"); a.add_argument("--prompt"); a.add_argument("--base", type=int)
+    a.add_argument("--model", choices=schema.STILL_MODELS, help="Qwen-2.1 for still/edit (default: plan or base)")
     a = sub.add_parser("versions"); a.add_argument("name")
     a = sub.add_parser("activate"); a.add_argument("name"); a.add_argument("sid")
     a.add_argument("kind", choices=["still", "clip"]); a.add_argument("v", type=int)
     sub.add_parser("selftest")
     sub.add_parser("stop")
     a = sub.add_parser("cuts"); a.add_argument("name")
+    a = sub.add_parser("direct", help="director mode: check, continuity, board, refs, compile, animatic, signoff")
+    a.add_argument("rest", nargs=argparse.REMAINDER)
     a = ap.parse_args(argv)
+
+    if a.cmd == "direct":
+        from . import direct
+        return direct.main(a.rest)
 
     if a.cmd == "selftest":
         return selftest()
@@ -190,6 +200,8 @@ def main(argv=None) -> int:
         src = plan.get("source")
         passage = Path(src).read_text(encoding="utf-8") if src and Path(src).is_file() else None
         errs = schema.validate(plan, passage)
+        if plan.get("directed") and (passage is None or not schema.coverage(plan, passage)["exact"]):
+            errs.append("plan: a directed plan's narration, joined, must equal plan.source exactly")
         if errs:
             print("\n".join(errs))
             return 1
@@ -199,17 +211,18 @@ def main(argv=None) -> int:
                    stages=a.stages.split(",") if a.stages else None,
                    only=set(a.only.split(",")) if a.only else None,
                    seeds=[int(x) for x in a.seeds.split(",")] if a.seeds else None,
-                   force=a.force, device=a.device, farm_after="keep" if a.keep_farm else "off")
+                   force=a.force, device=a.device, farm_after="keep" if a.keep_farm else "off",
+                   model=a.model)
     elif a.cmd == "status":
         print(json.dumps(stages.status(stages.piece_dir(a.name)), indent=1))
     elif a.cmd == "shot":
         if a.op == "still":
-            out = stages.still_one(a.name, a.sid, seed=a.seed, prompt=a.prompt)
+            out = stages.still_one(a.name, a.sid, seed=a.seed, prompt=a.prompt, model=a.model)
         elif a.op == "edit":
             if not a.prompt:
                 print("edit needs --prompt")
                 return 2
-            out = stages.edit_still(a.name, a.sid, a.prompt, seed=a.seed, base_v=a.base)
+            out = stages.edit_still(a.name, a.sid, a.prompt, seed=a.seed, base_v=a.base, model=a.model)
         elif a.op == "motion":
             out = stages.motion_one(a.name, a.sid, prompt_override=a.prompt, seed=a.seed)
         else:

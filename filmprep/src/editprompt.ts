@@ -143,9 +143,13 @@ export interface CameraFacts { heightM: number; fovDeg: number }
 /** One line, ground truth from the solver. A VLM reading the render got the height wrong tenfold. */
 export function cameraLine(c: CameraFacts): string {
   const h = c.heightM;
+  // Bands were 0.4-2.2 m all "normal standing eye height", so a low (0.62 m) or high (2.05 m)
+  // camera got the eye-level line (clay_film gardening audit, 2026-10-11).
   const where = h < 0.4 ? `${Math.round(h * 100)} cm above the floor, looking slightly up`
-    : h > 2.2 ? `${h.toFixed(1)} m up, angled down`
-      : `${h.toFixed(2)} m, normal standing eye height, horizon level`;
+    : h < 1.2 ? `${h.toFixed(2)} m, low, below eye height, looking slightly up`
+      : h <= 1.8 ? `${h.toFixed(2)} m, normal standing eye height, horizon level`
+        : h <= 2.2 ? `${h.toFixed(2)} m, above eye height, angled slightly down`
+          : `${h.toFixed(1)} m up, angled down`;
   return `The camera is at ${where}, with a ${Math.round(c.fovDeg)}-degree field of view.`;
 }
 

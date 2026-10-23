@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Editor</title>
+<style>
+  :root {
+    --bg: #101317; --panel: #181c22; --panel2: #1f242c; --line: #2b313a;
+    --text: #e9e6e1; --muted: #8a93a0; --dim: #5d6570;
+    --accent: #f2b134; --accent-soft: rgba(242,177,52,.28); --rec: #e5484d; --ok: #46a758;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  button { font: inherit; color: inherit; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 5px 10px; cursor: pointer; white-space: nowrap; }
+  button:hover:not(:disabled) { border-color: #3d4550; background: #262c35; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); color: #17130a; border-color: var(--accent); font-weight: 600; }
+  a { color: var(--accent); }
+  .app { display: grid; grid-template-rows: minmax(0, 1fr) auto auto; height: 100vh; padding: 10px 16px; gap: 8px; }
+  .top { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr); gap: 12px; min-height: 0; }
+  .stage { position: relative; background: #000; border-radius: 8px; overflow: hidden; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  video { max-width: 100%; max-height: 100%; display: block; }
+  .subs { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 18px 12px; background: linear-gradient(transparent, rgba(0,0,0,.85) 30%);
+    display: grid; gap: 4px; }
+  .script { font: 15px/1.35 Georgia, "Palatino Linotype", serif; color: #cfcac2; }
+  .script b { color: var(--accent); font: 600 12px system-ui, sans-serif; margin-right: 6px; }
+  .heard { font: 600 19px/1.3 system-ui, sans-serif; color: #fff; min-height: 1.3em; }
+  .heard span { opacity: .55; } .heard span.now { opacity: 1; color: var(--accent); }
+  .clock { position: absolute; top: 8px; left: 10px; background: rgba(0,0,0,.6); padding: 2px 8px; border-radius: 4px;
+    font: 600 13px ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+  .side { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  .card h2 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+  .bin { overflow-y: auto; min-height: 0; flex: 1; }
+  .tk { display: grid; grid-template-columns: 12px 1fr auto; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 6px; cursor: grab; }
+  .tk:hover { background: var(--panel2); }
+  .sw { width: 12px; height: 12px; border-radius: 3px; }
+  .muted { color: var(--muted); } .small { font-size: 12px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .bar .grow { flex: 1; }
+  #tl { width: 100%; height: 230px; display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; cursor: default; }
+  .keys { font-size: 12px; color: var(--muted); }
+  .keys kbd { font: 11px ui-monospace, Consolas, monospace; background: var(--panel2); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; color: var(--text); }
+  #sel { font: 12px ui-monospace, Consolas, monospace; white-space: pre-wrap; color: var(--muted); }
+  #msg { font-size: 12px; color: var(--muted); }
+  #msg.bad { color: var(--rec); }
+  button:focus-visible, .tk:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div class="stage">
+      <video id="vid" muted playsinline preload="auto"></video>
+      <div class="clock" id="clock">0:00.0</div>
+      <div class="subs"><div class="script" id="script"></div><div class="heard" id="heard"></div></div>
+    </div>
+    <div class="side">
+      <div class="card">
+        <h2>Selected clip</h2>
+        <div id="sel">Click a clip on the timeline.</div>
+      </div>
+      <div class="card bin">
+        <h2>Takes (drag onto the timeline, or Add to drop it where you recorded it)</h2>
+        <div id="bin"></div>
+      </div>
+      <div class="card bar">
+        <button class="primary" id="exwav">Export voice WAV</button>
+        <button id="exmp4">Export MP4</button>
+        <button id="openf">Open folder</button>
+        <span id="msg" class="grow"></span>
+      </div>
+    </div>
+  </div>
+  <div class="bar">
+    <button id="play" class="primary" style="min-width:74px">Play</button>
+    <button id="zin">Zoom +</button><button id="zout">Zoom -</button>
+    <button id="undo">Undo</button><button id="redo">Redo</button>
+    <button id="reset" title="Throw away your edits and go back to the automatic later-take-wins cut">Reset to auto cut</button>
+    <span class="grow"></span>
+    <span class="keys"><kbd>Space</kbd> play <kbd>S</kbd> split at playhead <kbd>[</kbd> <kbd>]</kbd> trim selected to playhead
+      <kbd>Del</kbd> delete <kbd>←</kbd><kbd>→</kbd> nudge 10 ms (Shift 100 ms) <kbd>Ctrl+Z</kbd> undo · drag edges to trim · Ctrl+wheel zoom</span>
+    <a href="/">Back to the booth</a>
+  </div>
+  <canvas id="tl"></canvas>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+// ?piece=NAME, else the piece last open in the booth (same origin, same localStorage key)
+const PIECE = new URLSearchParams(location.search).get("piece") ||
+  (() => { try { return JSON.parse(localStorage.getItem("vb.piece")) || ""; } catch { return ""; } })();
+let P, RATE = 0.95, clips = [], order = {}, buf = {}, peaks = {}, sel = -1;
+let pps = 20, view0 = 0, T = 0, playing = false, nodes = [], ctx = null, ctxT0 = 0, playT0 = 0;
+const hist = [], fut = [];
+const vid = $("#vid"), cv = $("#tl"), g = cv.getContext("2d");
+const RULER = 40, LANE = 82;
+
+const fmt = s => { s = Math.max(0, s); const m = Math.floor(s / 60); return m + ":" + (s - m * 60).toFixed(1).padStart(4, "0"); };
+const hue = id => (order[id] * 67) % 360;
+const sp = c => c.speed || 1;
+const len = c => (c.wav_out - c.wav_in) / sp(c);          // seconds on the output clock
+const msg = (t, bad) => { const m = $("#msg"); m.textContent = t; m.className = "grow" + (bad ? " bad" : ""); };
+
+// ---------- later take wins: paint clips in recording order, later over earlier
+function flatten() {
+  const idx = clips.map((c, i) => i).sort((a, b) => order[clips[a].take] - order[clips[b].take] || a - b);
+  let spans = [];
+  for (const i of idx) {
+    const c = clips[i], s = c.at, e = c.at + len(c);
+    const next = [];
+    for (const p of spans) {
+      if (p.e <= s || p.s >= e) { next.push(p); continue; }
+      if (p.s < s) next.push({ s: p.s, e: s, i: p.i });
+      if (p.e > e) next.push({ s: e, e: p.e, i: p.i });
+    }
+    next.push({ s, e, i });
+    spans = next;
+  }
+  spans.sort((a, b) => a.s - b.s);
+  return spans.filter(p => p.e - p.s > 0.005).map(p => {
+    const c = clips[p.i];
+    return { take: c.take, at: p.s, wav_in: c.wav_in + (p.s - c.at) * sp(c), wav_out: c.wav_in + (p.e - c.at) * sp(c), speed: sp(c), i: p.i };
+  });
+}
+
+// ---------- history + save
+function snap() { hist.push(JSON.stringify(clips)); if (hist.length > 200) hist.shift(); fut.length = 0; }
+let saveTimer = null;
+function changed() {
+  draw(); showSel();
+  if (playing) restart();
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try {
+      const r = await fetch(`/api/edit/${PIECE}`, { method: "POST", body: JSON.stringify({ clips: clips.map(({ take, at, wav_in, wav_out, speed }) => ({ take, at, wav_in, wav_out, speed: speed || 1 })) }) });
+      msg(r.ok ? "Saved " + new Date().toLocaleTimeString() : "Save failed", !r.ok);
+    } catch (e) { msg("Save failed: " + e, true); }
+  }, 700);
+}
+function undo() { if (!hist.length) return; fut.push(JSON.stringify(clips)); clips = JSON.parse(hist.pop()); sel = -1; changed(); }
+function redo() { if (!fut.length) return; hist.push(JSON.stringify(clips)); clips = JSON.parse(fut.pop()); sel = -1; changed(); }
+
+// ---------- playback: Web Audio is the clock, the picture follows at the booth rate
+function stopAudio() { for (const n of nodes) { try { n.stop(); } catch (e) {} } nodes = []; }
+function play(from) {
+  ctx = ctx || new AudioContext({ sampleRate: 48000 });
+  ctx.resume();
+  stopAudio();
+  playT0 = from; ctxT0 = ctx.currentTime + 0.12;
+  for (const f of flatten()) {
+    const e = f.at + len(f);
+    if (e <= from || !buf[f.take]) continue;
+    const off = Math.max(0, from - f.at), when = ctxT0 + Math.max(0, f.at - from), dur = len(f) - off;
+    const src = ctx.createBufferSource(), gn = ctx.createGain();
+    src.buffer = buf[f.take]; src.playbackRate.value = sp(f); src.connect(gn).connect(ctx.destination);
+    const x = 0.008;
+    gn.gain.setValueAtTime(0, when); gn.gain.linearRampToValueAtTime(1, when + x);
+    gn.gain.setValueAtTime(1, when + Math.max(x, dur - x)); gn.gain.linearRampToValueAtTime(0, when + dur);
+    src.start(when, Math.max(0, f.wav_in + off * sp(f)), dur * sp(f));
+    nodes.push(src);
+  }
+  vid.playbackRate = RATE;
+  vid.currentTime = from * RATE;
+  setTimeout(() => { if (playing) vid.play().catch(() => {}); }, 120);
+  playing = true; $("#play").textContent = "Pause";
+}
+function pause() { stopAudio(); vid.pause(); playing = false; $("#play").textContent = "Play"; }
+let rs = null;
+function restart() { clearTimeout(rs); rs = setTimeout(() => play(T), 150); }
+function seek(t) { T = Math.max(0, Math.min(P.duration, t)); if (playing) play(T); else vid.currentTime = T * RATE; tick(true); }
+
+function tick(once) {
+  if (playing && ctx) {
+    T = playT0 + Math.max(0, ctx.currentTime - ctxT0);
+    const vt = vid.currentTime / RATE;
+    if (!vid.paused && Math.abs(vt - T) > 0.12) vid.currentTime = T * RATE;
+    const w = cv.clientWidth;
+    if (T > view0 + w / pps * 0.85) view0 = T - w / pps * 0.15;
+  }
+  $("#clock").textContent = fmt(T) + "  " + (lineAt(T)?.id || "");
+  subs(); draw();
+  if (!once) requestAnimationFrame(() => tick());
+}
+
+// ---------- subtitles: the script line for this shot, and the words actually heard
+function lineAt(t) { let k = null; for (const l of P.lines) if (l.shot[0] <= t) k = l; return k; }
+function subs() {
+  const l = lineAt(T);
+  $("#script").innerHTML = l ? `<b>${l.id}</b>` + l.text.replace(/</g, "&lt;") : "";
+  const f = flatten().find(f => f.at <= T && T < f.at + len(f));
+  const h = $("#heard");
+  if (!f) { h.innerHTML = ""; return; }
+  const w = P.words[f.take] || [], pos = f.wav_in + (T - f.at) * sp(f);
+  let k = w.findIndex(x => x[1] > pos);
+  if (k < 0) { h.innerHTML = ""; return; }
+  const out = [];
+  for (let j = Math.max(0, k - 5); j < Math.min(w.length, k + 6); j++) {
+    if (w[j][0] < f.wav_in - 0.05 || w[j][1] > f.wav_out + 0.05) continue;
+    out.push(`<span class="${j === k && w[j][0] <= pos + 0.05 ? "now" : ""}">${w[j][2].replace(/</g, "&lt;")}</span>`);
+  }
+  h.innerHTML = out.join(" ");
+}
+
+// ---------- timeline
+const X = t => (t - view0) * pps, Tx = x => x / pps + view0;
+const laneOf = c => order[c.take] % 2;
+const clipY = c => RULER + 6 + laneOf(c) * (LANE + 8);
+function draw() {
+  const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== w * dpr || cv.height !== h * dpr) { cv.width = w * dpr; cv.height = h * dpr; }
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const t0 = view0, t1 = Tx(w);
+  // ruler: shots and where the script line is spoken
+  g.font = "11px system-ui"; g.textBaseline = "top";
+  for (const l of P.lines) {
+    if (l.shot[1] < t0 || l.shot[0] > t1) continue;
+    const x0 = X(l.shot[0]);
+    g.fillStyle = "rgba(138,147,160,.16)"; g.fillRect(X(l.speech[0]), 20, (l.speech[1] - l.speech[0]) * pps, 8);
+    g.fillStyle = "#3a414b"; g.fillRect(x0, 0, 1, h);
+    g.fillStyle = "#c9c4bc"; g.fillText(l.id, x0 + 3, 3);
+    if (pps > 25) { g.fillStyle = "#8a93a0"; g.fillText(l.text.slice(0, Math.max(0, Math.floor((l.shot[1] - l.shot[0]) * pps / 6.2) - 6)), x0 + 36, 3); }
+  }
+  // seconds
+  const step = [0.5, 1, 2, 5, 10, 30, 60, 120][[0.5, 1, 2, 5, 10, 30, 60, 120].findIndex(s => s * pps >= 70)] || 300;
+  g.fillStyle = "#5d6570";
+  for (let s = Math.floor(t0 / step) * step; s < t1; s += step) { g.fillRect(X(s), 30, 1, 8); g.fillText(fmt(s), X(s) + 3, 28); }
+  g.fillStyle = "#2b313a"; g.fillRect(0, RULER, w, 1);
+  // clips
+  const flat = flatten(), vis = {};
+  for (const f of flat) (vis[f.i] = vis[f.i] || []).push(f);
+  clips.forEach((c, i) => {
+    const s = c.at, e = c.at + len(c);
+    if (e < t0 || s > t1) return;
+    const x = X(s), cw = Math.max(2, len(c) * pps), y = clipY(c), H = LANE, hh = hue(c.take);
+    g.fillStyle = `hsla(${hh},45%,30%,.55)`; g.fillRect(x, y, cw, H);            // hidden under a later take
+    for (const f of vis[i] || []) { g.fillStyle = `hsla(${hh},55%,38%,1)`; g.fillRect(X(f.at), y, len(f) * pps, H); }
+    // waveform
+    const pk = peaks[c.take];
+    if (pk) {
+      g.fillStyle = `hsla(${hh},70%,78%,.9)`;
+      const xa = Math.max(0, x), xb = Math.min(w, x + cw), mid = y + H / 2 - 6;
+      for (let px = xa; px < xb; px++) {
+        const wt0 = c.wav_in + (Tx(px) - c.at) * sp(c), wt1 = wt0 + sp(c) / pps;
+        let m = 0;
+        for (let k = Math.max(0, Math.floor(wt0 * 100)); k <= Math.min(pk.length - 1, Math.floor(wt1 * 100)); k++) m = Math.max(m, pk[k]);
+        const a = Math.min(1, m * 1.6) * (H / 2 - 10);
+        g.fillRect(px, mid - a, 1, 2 * a + 1);
+      }
+    }
+    // words
+    if (pps >= 35) {
+      g.fillStyle = "#fff"; g.font = "11px system-ui";
+      for (const wd of P.words[c.take] || []) {
+        if (wd[1] < c.wav_in || wd[0] > c.wav_out) continue;
+        const wx = X(c.at + (wd[0] - c.wav_in) / sp(c));
+        if (wx < -60 || wx > w) continue;
+        g.fillText(wd[2], wx, y + H - 14);
+      }
+    }
+    g.strokeStyle = i === sel ? "#f2b134" : "rgba(0,0,0,.6)"; g.lineWidth = i === sel ? 2 : 1;
+    g.strokeRect(x + .5, y + .5, cw - 1, H - 1);
+    g.fillStyle = "rgba(255,255,255,.85)"; g.font = "10px ui-monospace, Consolas";
+    if (cw > 50) g.fillText(c.take.slice(-6), x + 4, y + 3);
+  });
+  // playhead
+  g.fillStyle = "#f2b134"; g.fillRect(X(T) - 1, 0, 2, h);
+}
+
+function hit(x, y) {
+  const t = Tx(x);
+  const cand = clips.map((c, i) => i).filter(i => { const c = clips[i], cy = clipY(c); return y >= cy && y <= cy + LANE && t >= c.at - 6 / pps && t <= c.at + len(c) + 6 / pps; });
+  cand.sort((a, b) => order[clips[b].take] - order[clips[a].take]);
+  if (!cand.length) return null;
+  const i = cand[0], c = clips[i], xs = X(c.at), xe = X(c.at + len(c));
+  return { i, mode: Math.abs(x - xs) < 7 ? "in" : Math.abs(x - xe) < 7 ? "out" : "move" };
+}
+let drag = null;
+cv.addEventListener("mousedown", e => {
+  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  const hh = y > RULER ? hit(x, y) : null;
+  if (!hh) { sel = -1; showSel(); seek(Tx(x)); drag = { mode: "seek" }; return; }
+  sel = hh.i; showSel(); snap();
+  const c = clips[sel];
+  drag = { ...hh, x0: x, c0: { ...c }, moved: false };
+});
+addEventListener("mousemove", e => {
+  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  if (!drag) { const hh = y > RULER ? hit(x, y) : null; cv.style.cursor = !hh ? "default" : hh.mode === "move" ? "grab" : "ew-resize"; return; }
+  if (drag.mode === "seek") { seek(Tx(x)); return; }
+  const dt = (x - drag.x0) / pps, c = clips[drag.i], o = drag.c0, B = buf[c.take]?.duration || 1e9;
+  drag.moved = true;
+  if (drag.mode === "move") c.at = Math.max(0, o.at + dt);
+  else if (drag.mode === "in") { const d = Math.min(Math.max(dt, -o.wav_in / sp(o)), len(o) - 0.05); c.wav_in = o.wav_in + d * sp(o); c.at = o.at + d; }
+  else { const d = Math.max(Math.min(dt, (B - o.wav_out) / sp(o)), -(len(o) - 0.05)); c.wav_out = o.wav_out + d * sp(o); }
+  draw(); showSel();
+});
+addEventListener("mouseup", () => { if (drag && drag.mode !== "seek") { if (drag.moved) changed(); else hist.pop(); } drag = null; });
+cv.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = cv.getBoundingClientRect(), x = e.clientX - r.left;
+  if (e.ctrlKey || e.metaKey) { const t = Tx(x); pps = Math.min(800, Math.max(0.5, pps * (e.deltaY < 0 ? 1.25 : 0.8))); view0 = t - x / pps; }
+  else view0 += (e.deltaY + e.deltaX) / pps;
+  view0 = Math.max(-2, Math.min(P.duration, view0)); draw();
+}, { passive: false });
+cv.addEventListener("dragover", e => e.preventDefault());
+cv.addEventListener("drop", e => {
+  e.preventDefault();
+  const id = e.dataTransfer.getData("text/take"); if (!id || !buf[id]) return;
+  const r = cv.getBoundingClientRect();
+  addTake(id, Math.max(0, Tx(e.clientX - r.left)));
+});
+function addTake(id, at) {
+  snap();
+  clips.push({ take: id, at, wav_in: 0, wav_out: buf[id].duration, speed: (P.takes.find(t => t.id === id) || {}).speed || 1 });
+  sel = clips.length - 1; changed();
+}
+
+function splitAt(t) {
+  let i = sel >= 0 && clips[sel].at < t && t < clips[sel].at + len(clips[sel]) ? sel : -1;
+  if (i < 0) { const f = flatten().find(f => f.at < t && t < f.at + len(f)); if (f) i = f.i; }
+  if (i < 0) return;
+  snap();
+  const c = clips[i], cut = c.wav_in + (t - c.at) * sp(c);
+  clips.splice(i + 1, 0, { take: c.take, at: t, wav_in: cut, wav_out: c.wav_out, speed: sp(c) });
+  c.wav_out = cut; sel = i + 1; changed();
+}
+function trimTo(side) {
+  if (sel < 0) return;
+  const c = clips[sel], d = T - c.at;
+  if (side === "in") { if (d <= 0 || d >= len(c) - 0.05) return; snap(); c.wav_in += d * sp(c); c.at = T; }
+  else { if (d <= 0.05) return; snap(); c.wav_out = Math.min(c.wav_in + d * sp(c), buf[c.take]?.duration || 1e9); }
+  changed();
+}
+addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") return;
+  if (e.code === "Space") { e.preventDefault(); playing ? pause() : play(T); }
+  else if (e.key === "s" || e.key === "S") splitAt(T);
+  else if (e.key === "[") trimTo("in");
+  else if (e.key === "]") trimTo("out");
+  else if ((e.key === "Delete" || e.key === "Backspace") && sel >= 0) { snap(); clips.splice(sel, 1); sel = -1; changed(); }
+  else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && sel >= 0) {
+    e.preventDefault(); snap(); clips[sel].at = Math.max(0, clips[sel].at + (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 0.1 : 0.01)); changed();
+  }
+  else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+  else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); }
+});
+
+function showSel() {
+  const el = $("#sel");
+  if (sel < 0 || !clips[sel]) { el.textContent = "Click a clip on the timeline."; return; }
+  const c = clips[sel], w = (P.words[c.take] || []).filter(x => x[0] >= c.wav_in - 0.05 && x[1] <= c.wav_out + 0.05).map(x => x[2]);
+  el.textContent = `take ${c.take.slice(5)}\nplays ${fmt(c.at)} to ${fmt(c.at + len(c))} (${len(c).toFixed(2)} s)\n` +
+    `from the take's ${fmt(c.wav_in)} to ${fmt(c.wav_out)}\n"${w.slice(0, 8).join(" ")}${w.length > 16 ? " ... " + w.slice(-8).join(" ") : w.length > 8 ? " " + w.slice(8).join(" ") : ""}"`;
+}
+
+function bin() {
+  $("#bin").innerHTML = "";
+  for (const t of P.takes) {
+    const d = document.createElement("div");
+    d.className = "tk"; d.draggable = true; d.tabIndex = 0;
+    const dur = buf[t.id] ? buf[t.id].duration : 0;
+    d.innerHTML = `<span class="sw" style="background:hsl(${hue(t.id)},55%,45%)"></span>
+      <span>${t.created.slice(11) || t.id.slice(-6)} <span class="muted small">${fmt(t.range[0])} &ndash; ${fmt(t.range[1])}${dur ? ", " + fmt(dur) + " long" : ""}</span></span>
+      <button class="sm">Add</button>`;
+    d.addEventListener("dragstart", e => e.dataTransfer.setData("text/take", t.id));
+    d.querySelector("button").onclick = () => { if (buf[t.id]) addTake(t.id, Math.max(0, t.rec_at)); };
+    d.addEventListener("dblclick", () => seek(t.range[0]));
+    $("#bin").appendChild(d);
+  }
+}
+
+async function exportIt(mp4) {
+  if (playing) pause();
+  const flat = flatten().map(({ take, at, wav_in, wav_out, speed }) => ({ take, at, wav_in, wav_out, speed }));
+  $("#exwav").disabled = $("#exmp4").disabled = true;
+  msg(mp4 ? "Exporting WAV and MP4 (a few minutes)..." : "Exporting WAV (about a minute)...");
+  try {
+    const r = await fetch(`/api/edit_render/${PIECE}`, { method: "POST", body: JSON.stringify({ flat, mp4 }) });
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || r.status);
+    msg(`Wrote ${j.wav}${j.mp4 ? " and " + j.mp4 : ""} (peak ${j.voice.peak_db} dB, ${j.voice.clipped} clipped)`);
+  } catch (e) { msg("Export failed: " + e.message, true); }
+  $("#exwav").disabled = $("#exmp4").disabled = false;
+}
+
+$("#play").onclick = () => playing ? pause() : play(T);
+$("#zin").onclick = () => { const t = T; pps = Math.min(800, pps * 1.5); view0 = t - cv.clientWidth / pps / 2; draw(); };
+$("#zout").onclick = () => { const t = T; pps = Math.max(0.5, pps / 1.5); view0 = t - cv.clientWidth / pps / 2; draw(); };
+$("#undo").onclick = undo; $("#redo").onclick = redo;
+$("#reset").onclick = () => { if (!confirm("Replace your edits with the automatic cut? (Undo still works.)")) return; snap(); clips = JSON.parse(JSON.stringify(P.seed)); sel = -1; changed(); };
+$("#exwav").onclick = () => exportIt(false);
+$("#exmp4").onclick = () => exportIt(true);
+$("#openf").onclick = () => fetch(`/api/open/${PIECE}`, { method: "POST" });
+addEventListener("resize", draw);
+
+(async function boot() {
+  if (!PIECE) { msg("No piece: open /editor?piece=NAME, or pick one in the booth first."); return; }
+  msg("Loading project...");
+  P = await (await fetch(`/api/edit/${PIECE}`)).json();
+  RATE = P.rate;
+  [...P.takes].map(t => t.id).sort().forEach((id, k) => order[id] = k);
+  clips = P.clips;
+  vid.src = `/media/${PIECE}/picture`;
+  vid.playbackRate = RATE;
+  bin(); tick();
+  ctx = new AudioContext({ sampleRate: 48000 });
+  let n = 0;
+  const files = P.takes.map(t => fetch(`/media/${PIECE}/take/${t.id}?preset=raw`).then(r => r.arrayBuffer()));
+  for (const [k, t] of P.takes.entries()) {
+    msg(`Loading takes ${++n}/${P.takes.length}...`);
+    const b = await ctx.decodeAudioData(await files[k]);
+    buf[t.id] = b;
+    const d = b.getChannelData(0), hop = b.sampleRate / 100, pk = new Float32Array(Math.ceil(d.length / hop));
+    for (let k = 0; k < pk.length; k++) { let m = 0; const e = Math.min(d.length, (k + 1) * hop); for (let j = k * hop; j < e; j++) { const v = d[j] < 0 ? -d[j] : d[j]; if (v > m) m = v; } pk[k] = m; }
+    peaks[t.id] = pk;
+    draw();
+  }
+  bin();
+  msg(P.saved ? "Loaded your saved edit." : "Loaded the automatic later-take-wins cut as a starting point. Your edits save as you go.");
+})();
+</script>
+</body>
+</html>

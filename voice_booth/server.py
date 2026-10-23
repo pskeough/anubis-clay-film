@@ -1,10 +1,10 @@
 """Voice Booth: record your own narration against a finished piece's picture.
 
-VoiceBooth.bat starts this with the Podcast_Audio_Gen venv (faster-whisper, numpy, imageio-ffmpeg)
+VoiceBooth.bat starts this with CLAY_FILM_PODCAST_PY (a venv with faster-whisper, numpy, imageio-ffmpeg)
 and opens http://127.0.0.1:7090. Bound to 127.0.0.1 only; 127.0.0.1 is a secure context, so the
 browser allows the microphone without https. No GPU: whisper runs on CPU once per piece, ffmpeg on CPU.
 
-Per piece (any folder under Agentic_Slop_MP4/pieces with timeline.json and _assemble/_silent.mp4):
+Per piece (any folder under CLAY_FILM_PIECES with timeline.json and _assemble/_silent.mp4):
   picture   _assemble/_silent.mp4, the final graded film with no audio
   guide     narration.mp3, the AI read, optional in the page
   words     words.json, word timings of the AI read (align.py, cached)
@@ -39,6 +39,10 @@ from urllib.parse import parse_qs, unquote, urlparse
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+from clay_film import envfile  # noqa: E402  (stdlib only: the repo-root .env, never over the shell)
+
+envfile.load()
 PIECES = Path(os.environ.get("CLAY_FILM_PIECES") or HERE.parent / "pieces")
 PORT = int(os.environ.get("VOICE_BOOTH_PORT", "7090"))
 SR = 48000
@@ -49,6 +53,9 @@ MOTION = ("blend", "repeat", "smooth")
 sys.path.insert(0, str(HERE))
 import align  # noqa: E402
 import captions  # noqa: E402
+import edit  # noqa: E402
+
+edit.S = sys.modules[__name__]
 
 _align_lock = threading.Lock()
 _caption_lock = threading.Lock()
@@ -649,6 +656,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if not parts:
                 return self.send_file(HERE / "index.html", "text/html; charset=utf-8")
+            if parts == ["editor"]:
+                return self.send_file(HERE / "editor.html", "text/html; charset=utf-8")
+            if len(parts) == 3 and parts[:2] == ["api", "edit"]:
+                return self.send_json(edit.project(piece_dir(parts[2])))
             if parts == ["recorder-worklet.js"]:
                 return self.send_file(HERE / "recorder-worklet.js", "text/javascript")
             if parts == ["api", "pieces"]:
@@ -698,6 +709,12 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 3 and parts[:2] == ["api", "take"]:
                 d = piece_dir(parts[2])
                 return self.send_json(save_take(d, self.body(), q))
+            if len(parts) == 3 and parts[:2] == ["api", "edit"]:
+                return self.send_json(edit.save(piece_dir(parts[2]), json.loads(self.body())["clips"]))
+            if len(parts) == 3 and parts[:2] == ["api", "edit_render"]:
+                req = json.loads(self.body())
+                return self.send_json(edit.render(piece_dir(parts[2]), req["flat"], bool(req.get("mp4")),
+                                                  req.get("preset", "broadcast")))
             if parts == ["api", "miccheck"]:
                 return self.send_json(mic_check(self.body(), q))
             if len(parts) == 3 and parts[:2] == ["api", "discard"]:

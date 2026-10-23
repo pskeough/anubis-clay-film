@@ -14,7 +14,9 @@ The clay stage repairs two gate failures itself and reports the rest:
     void       -> step the people back toward the camera until the model extends 6 m past them
 cover and sparse are reported, not repaired: they mean the shot needs a director's eye.
 """
+import copy
 import json
+import re
 import os
 import queue as _queue
 import shutil
@@ -29,10 +31,15 @@ from pathlib import Path
 
 from . import paths, schema
 
-STAGES = ["compile", "narrate", "clay", "stills", "motion", "assemble"]
+STAGES = ["compile", "narrate", "clay", "stills", "endframes", "motion", "assemble"]
 STILL_STEPS = 18
 T2I_STEPS = 25            # free shots start from noise, not from a clay pass
 STILL_W, STILL_H = 1344, 768
+# Which Qwen-Image-2.1 transformer renders stills, edits and end frames (farm graphs.QWEN21_VARIANTS):
+# "base" at the step counts above, "turbo" (official Qwen-Image-2.1-Turbo, 8 steps on its saved
+# sigmas) or "turbo_simple" (same model, euler/simple at 8). Chosen by, in order: the model
+# argument (CLI --model), CLAY_FILM_STILL_MODEL, the plan's still_model (config.json), "base".
+STILL_MODELS = schema.STILL_MODELS
 # CLAY_FILM_DRY=1 (or the studio's --dry) fakes every GPU job from fixture files. Clay, compile
 # and assembly still run for real: they are CPU work.
 DRY = os.environ.get("CLAY_FILM_DRY") == "1"
@@ -52,6 +59,15 @@ def piece_dir(name_or_path: str) -> Path:
 def status(piece: Path) -> dict:
     f = piece / "status.json"
     return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+
+
+def still_model(piece: Path, model: str | None = None) -> str:
+    f = Path(piece) / "config.json"
+    cfg = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    m = model or os.environ.get("CLAY_FILM_STILL_MODEL") or cfg.get("still_model") or "base"
+    if m not in STILL_MODELS:
+        raise ValueError(f"still model {m!r}: use one of {STILL_MODELS}")
+    return m
 
 
 def _mark(piece: Path, stage: str, state: str, **detail) -> None:
@@ -170,6 +186,14 @@ def compile_stage(piece: Path, **_) -> None:
     src = plan.get("source")
     passage = Path(src).read_text(encoding="utf-8") if src and Path(src).is_file() else None
     errs = schema.validate(plan, passage)
+    # A directed plan narrates its whole source and nothing else, in order. The per-shot substring
+    # check passes a plan that skips or repeats text, so check the join (clay_film.direct).
+    if plan.get("directed"):
+        if passage is None:
+            errs.append("plan.source: a directed plan needs its narration source file")
+        elif not schema.coverage(plan, passage)["exact"]:
+            errs.append("plan: the shots' narration joined is not plan.source; recompile the "
+                        "direction against the current text")
     if errs:
         raise ValueError("plan.json does not validate:\n- " + "\n- ".join(errs))
     job = schema.compile_plan(plan, piece)
@@ -226,6 +250,10 @@ def clay(piece: Path, only: set | None = None, rounds: int = 4, **_) -> None:
         for s in todo:
             g = by[s["sid"]]["gates"]
             fix = None
+            # the geometry this round actually rendered; a fix found in the final round is never
+            # rendered, so it is undone below rather than written back (gardening audit 2026-10-11)
+            snap = (s["shot"]["distance"], copy.deepcopy(s.get("figureAt")),
+                    copy.deepcopy(s.get("extraFigures")), s.get("_moved"))
             ux, uz = by[s["sid"]]["view"]
             d = schema.DISTANCES.index(s["shot"]["distance"])
             if any(x.startswith("fov") for x in g) and d > 3:
@@ -251,6 +279,14 @@ def clay(piece: Path, only: set | None = None, rounds: int = 4, **_) -> None:
                 repairs.append(f"{s['sid']} round {rnd}: {', '.join(g)}; {fix}")
                 _say(f"repair {repairs[-1]}")
                 retry.append(s)
+            elif fix:
+                s["shot"]["distance"], fa, ef, mv = snap
+                for k, v in (("figureAt", fa), ("extraFigures", ef), ("_moved", mv)):
+                    if v is None:
+                        s.pop(k, None)
+                    else:
+                        s[k] = v
+                _say(f"{s['sid']}: gates still open after {rounds} repairs ({', '.join(g)}); kept the rendered geometry")
         if not retry:
             break
         todo = retry
@@ -285,13 +321,65 @@ def _sheet(files: list[Path], out: Path) -> None:
     sheet.save(out, quality=88)
 
 
+# -- Qwen-2.1 edit hygiene (gardening_2min, 2026-10-10) ------------------------------------------
+# Every edit of a photograph came back relit and over-sharpened (contrast x1.3, detail x2.3 against
+# its input). Two causes, both measured in qwen21_turbo_bench/grid_sweep.py on one canvas:
+#  1. noise replay (diffusers #14824): an edit sampled with the seed that generated its input re-adds
+#     that input's own noise. The pieces used one seed for everything, so the refs plate, every
+#     shot and every end frame shared 2207. Same seed x1.31/x2.29; a different seed x0.98/x1.25.
+#  2. the resolved latent grid (ComfyUI #16435, open): resolution=0 on 1344x768 is grid 84x48 and
+#     still noisier than 960 (1280x736, grid 80x46: x0.96/x1.04). Edits run at EDIT_RES and are
+#     resized back to the still size.
+EDIT_RES = 960
+
+
+def edit_seed(seed: int, salt: int) -> int:
+    """A seed for an edit that can never equal the (small, per-piece) seed its input was made with."""
+    return (int(seed) * 1_000_003 + (int(salt) + 1) * 7_919 + 104_729) % 2_147_483_647
+
+
+def _fit(p: Path) -> None:
+    """Resize an edit output back to the still size (EDIT_RES resolves 1344x768 to 1280x736)."""
+    from PIL import Image
+    im = Image.open(p)
+    if im.size != (STILL_W, STILL_H):
+        im.convert("RGB").resize((STILL_W, STILL_H), Image.LANCZOS).save(p)
+
+
+_PEOPLE_REF = re.compile(r"The (?:the |a |an )?(.+?) is the person in <image(\d+)>")
+
+
+def identity_prompt(names: list[str]) -> str:
+    """Pass 2 of a reference shot: image_1 is the shot's own t2i frame, image_2.. the character sheets.
+    The location plate is never the canvas (it made every gardening shot the empty diner)."""
+    # face and hair only: a character sheet shows one costume (the diner coat), and the shot's own
+    # prompt already dresses them for where they are (lab suit, base layer)
+    who = " ".join(f"The {n} in <image1> is the person in <image{k}>: give the {n} that person's face "
+                   f"and hair." for k, n in enumerate(names, start=2))
+    return ("Keep <image1> exactly as it is: its framing, camera angle, composition, the setting, every "
+            f"pose, all the clothing, the light and the colours. {who} Change nothing else.")
+
+
+def people_refs(s: dict) -> list[tuple[str, str]]:
+    """(name, ref path) for the people in a compiled shot's ref_prompt, in image order; places dropped."""
+    out = []
+    for name, k in sorted(_PEOPLE_REF.findall(s.get("ref_prompt", "")), key=lambda x: int(x[1])):
+        k = int(k)
+        if 1 <= k <= len(s.get("refs") or []):
+            out.append((name, s["refs"][k - 1]))
+    return out
+
+
 def stills(piece: Path, only: set | None = None, seeds: list[int] | None = None,
-           force: bool = False, **_) -> None:
+           force: bool = False, model: str | None = None, **_) -> None:
     from PIL import Image
     sys.path.insert(0, str(paths.FARM))
     import graphs  # noqa: E402  (farm modules)
     from dispatch import Farm, Job  # noqa: E402
     cfg = json.loads((piece / "config.json").read_text(encoding="utf-8"))
+    _direction_gate(piece, cfg)
+    variant = still_model(piece, model)
+    _say(f"stills: qwen21 {variant}")
     seeds = seeds or [cfg.get("seed", 31337)]
     blk, raw = piece / "blockout", piece / "stills_raw"
     final = piece / ("stills" if len(seeds) == 1 else "stills_cand")
@@ -299,6 +387,11 @@ def stills(piece: Path, only: set | None = None, seeds: list[int] | None = None,
     compiled = {f"s{s['i']:03d}": s for s in
                 json.loads((piece / "shots.json").read_text(encoding="utf-8"))}
     jobs = []
+    # the clay job (people descs per shot) and the prep rows (who is shown), for mannequin tinting
+    jf, pf = piece / "clay_job_run.json", blk / "prep_last.json"
+    tint_jobs = ({s["sid"]: s for s in json.loads(jf.read_text(encoding="utf-8"))["shots"]}
+                 if jf.exists() else {})
+    tint_prep = ({r["sid"]: r for r in json.loads(pf.read_text(encoding="utf-8"))} if pf.exists() else {})
     for clay_png in sorted(blk.glob("s*_clay.png")):
         sid = clay_png.name[:4]
         if only and sid not in only:
@@ -308,8 +401,32 @@ def stills(piece: Path, only: set | None = None, seeds: list[int] | None = None,
         # a hand-written still_prompt in the plan replaces the one _filmprep.ts wrote
         prompt = (compiled.get(sid, {}).get("still_prompt")
                   or (blk / f"{sid}_prompt.txt").read_text(encoding="utf-8"))
-        newest_in = max(clay_png.stat().st_mtime, (blk / f"{sid}_prompt.txt").stat().st_mtime)
-        for seed in seeds:
+        # The edit input is the clay with a lit mannequin per visible person (_filmprep writes
+        # <sid>_people.png after the clay). The empty clay left placement to the prompt, and the model
+        # cloned people and swapped their sides (gardening p01, 2026-10-11). An older people pass than
+        # the clay is stale: that shot has nobody in frame now.
+        people = blk / f"{sid}_people.png"
+        src = people if people.exists() and people.stat().st_mtime >= clay_png.stat().st_mtime else clay_png
+        newest_in = max(src.stat().st_mtime, (blk / f"{sid}_prompt.txt").stat().st_mtime)
+        if src == people:
+            # each mannequin tinted its person's clothes colour (clay_film/tint.py): grey ones let the
+            # model swap two people and double a third (gardening p13, 2026-10-11). The tinted file is
+            # derived, so freshness is still judged on the people pass.
+            tinted = blk / f"{sid}_people_tint.png"
+            if not tinted.exists() or tinted.stat().st_mtime < people.stat().st_mtime:
+                from .tint import tint_people
+                tinted = tint_people(blk, sid, [p["desc"] for p in tint_jobs.get(sid, {}).get("people", [])],
+                                     tint_prep.get(sid, {}).get("shown"))
+            if tinted is not None:
+                src = tinted
+        # a per-shot reroll pin: <sid>_seed.txt in blockout/ (one integer) overrides the piece seed
+        pin = blk / f"{sid}_seed.txt"
+        if pin.exists() and len(seeds) == 1:
+            seeds_here = [int(pin.read_text().strip())]
+            newest_in = max(newest_in, pin.stat().st_mtime)
+        else:
+            seeds_here = seeds
+        for seed in seeds_here:
             name = sid if len(seeds) == 1 else f"{sid}_{seed}"
             # Done only when a still is newer than its clay pass and prompt. Skipping on any
             # existing stills/ file meant a re-rendered clay pass never reached the still
@@ -320,12 +437,15 @@ def stills(piece: Path, only: set | None = None, seeds: list[int] | None = None,
                 continue
             # A unique SaveImage prefix: an identical graph is a ComfyUI cache hit that reports the
             # previous output's filename, which the farm has already moved away (HTTP 404 on /view).
-            g = graphs.qwen21_edit(prompt, [clay_png.name], steps=STILL_STEPS, resolution=0,
-                                   seed=seed, prefix=f"{name}_{int(time.time())}")
+            g = graphs.qwen21_edit(prompt, [src.name], steps=STILL_STEPS, resolution=EDIT_RES,
+                                   seed=seed, prefix=f"{name}_{int(time.time())}", variant=variant)
             jobs.append(Job(job_id=name, graph=g, model_key="qwen21", out_name=name,
-                            meta={"sid": sid, "seed": seed}, inputs=[clay_png]))
+                            meta={"sid": sid, "seed": seed, "edit": True}, inputs=[src]))
+    # free shots: text-to-image from the compiled prompt (style clause + still_prompt + cast). A shot
+    # with people in its refs then gets pass 2, an identity edit of that frame (identity_prompt).
+    t2i_dir = raw / "_t2i"
+    second = {}   # name -> (shot, seed) for pass 2
     for sid, s in compiled.items():
-        # free shots: text-to-image from the compiled prompt (style clause + still_prompt + cast)
         if s.get("mode") != "free" or (only and sid not in only):
             continue
         for seed in seeds:
@@ -333,28 +453,65 @@ def stills(piece: Path, only: set | None = None, seeds: list[int] | None = None,
             if not force and (final / f"{name}.png").exists():
                 continue
             g = graphs.qwen21_t2i(s["still_prompt"], width=STILL_W, height=STILL_H, steps=T2I_STEPS,
-                                  seed=seed, prefix=f"{name}_{int(time.time())}")
+                                  seed=seed + s["i"], prefix=f"{name}_{int(time.time())}", variant=variant)
+            people = people_refs(s) if s.get("refs") else []
             jobs.append(Job(job_id=name, graph=g, model_key="qwen21", out_name=name,
-                            meta={"sid": sid, "seed": seed, "mode": "free"}))
+                            meta={"sid": sid, "seed": seed + s["i"], "mode": "free", "two_pass": bool(people)}))
+            if people:
+                second[name] = (s, seed)
     if jobs and DRY:
         from . import dry
         raw.mkdir(parents=True, exist_ok=True)
         for j in jobs:
             dry.still("free" if j.meta.get("mode") == "free" else "clay", raw / f"{j.out_name}.png",
                       int(j.meta["sid"][1:]), j.meta["seed"], "", log=_say)
-        jobs = []
+        jobs, second = [], {}
     if jobs:
         farm("pair")
-        f = Farm(raw, job_timeout=1800)
-        # The farm's 18 GB RAM gate is sized for the Qwen3-VL-32B encoder. Qwen-2.1 reads the 8B
-        # w4a8 one; with 18 GB the first run waited out the full 300 s gate on a box at 9.8 GB free.
-        f.LOAD_MIN_FREE_GB = 8.0
-        # The 90 s stagger is held on every job, which serialises the pair. Only the first job per
-        # worker loads weights here; later ones hit the cache and sample in ~30 s.
-        f.LOAD_STAGGER_S = 20.0
-        _gate_first_load_only(f)
-        done = f.run(jobs)
+
+        def _farm(into: Path):
+            f = Farm(into, job_timeout=1800)
+            # The farm's 18 GB RAM gate is sized for the Qwen3-VL-32B encoder. Qwen-2.1 reads the 8B
+            # w4a8 one; with 18 GB the first run waited out the full 300 s gate on a box at 9.8 GB free.
+            f.LOAD_MIN_FREE_GB = 8.0
+            # The 90 s stagger is held on every job, which serialises the pair. Only the first job per
+            # worker loads weights here; later ones hit the cache and sample in ~30 s.
+            f.LOAD_STAGGER_S = 20.0
+            _gate_first_load_only(f)
+            return f
+        # pass 1: two-pass shots land in raw/_t2i/ (kept for review), the rest straight in raw/
+        one = [j for j in jobs if not j.meta.get("two_pass")]
+        pre = [j for j in jobs if j.meta.get("two_pass")]
+        done = _farm(raw).run(one) if one else []
+        if pre:
+            t2i_dir.mkdir(parents=True, exist_ok=True)
+            done += _farm(t2i_dir).run(pre)
+        for d in done:
+            if d.status == "ok" and d.files and next((j for j in jobs if j.job_id == d.job_id), None).meta.get("edit"):
+                _fit(raw / d.files[0])
         bad = [d.job_id for d in done if d.status != "ok"]
+        # pass 2: identity edit, canvas = the shot's own t2i frame, never the location plate
+        jobs2 = []
+        for name, (s, seed) in second.items():
+            canvas = t2i_dir / f"{name}.png"
+            if name in bad or not canvas.exists():
+                continue
+            people = people_refs(s)
+            inputs = [canvas] + _stage_refs([p for _, p in people], piece / "_refs", name)
+            g = graphs.qwen21_edit(identity_prompt([n for n, _ in people]), [x.name for x in inputs],
+                                   steps=T2I_STEPS, resolution=EDIT_RES, seed=edit_seed(seed, s["i"]),
+                                   prefix=f"{name}_id_{int(time.time())}", variant=variant)
+            jobs2.append(Job(job_id=name, graph=g, model_key="qwen21", out_name=name, inputs=inputs,
+                             meta={"sid": s and f"s{s['i']:03d}", "mode": "identity"}))
+        if jobs2:
+            _say(f"stills: identity pass on {len(jobs2)} shots")
+            for d in _farm(raw).run(jobs2):
+                if d.status == "ok" and d.files:
+                    _fit(raw / d.files[0])
+                else:
+                    # the clean t2i frame stands in; the shot keeps its composition, loses only identity
+                    _say(f"stills: identity pass failed for {d.job_id} ({d.error}); using the t2i frame")
+                    shutil.copy2(t2i_dir / f"{d.job_id}.png", raw / f"{d.job_id}.png")
         if bad:
             raise RuntimeError(f"stills failed: {bad} (rerun the stage; finished stills are kept)")
     for src in sorted(raw.glob("s*.png")) if raw.exists() else []:
@@ -367,10 +524,16 @@ def stills(piece: Path, only: set | None = None, seeds: list[int] | None = None,
 
 
 def motion(piece: Path, only: set | None = None, **_) -> None:
+    if _remote_motion():
+        # rented pods (farm/config.py remote_workers): every shot in one batch over the tunnels,
+        # no local farm
+        from . import motion_batch
+        motion_batch.motion_stage(piece, only)
+        return
     compiled = json.loads((piece / "shots.json").read_text(encoding="utf-8"))
-    if DRY or any(s.get("motion_prompt") for s in compiled):
-        # a hand-edited H3 prompt (or the dry backend): shot by shot through motion_one, which
-        # reads the override. Without either, animate_shots runs unchanged.
+    if DRY or any(s.get("motion_prompt") or s.get("motion_plan") for s in compiled):
+        # a hand-edited H3 prompt, a director's motion plan (or the dry backend): shot by shot through
+        # motion_one, which builds or reads the prompt. Without any, animate_shots runs unchanged.
         for s in compiled:
             sid = f"s{s['i']:03d}"
             if (only and sid not in only) or (piece / "clips" / f"{sid}.mp4").exists():
@@ -382,8 +545,27 @@ def motion(piece: Path, only: set | None = None, **_) -> None:
     cmd = [paths.SYS_PY, paths.LIB / "animate_shots.py", piece]
     if only:
         cmd += ["--only", ",".join(str(int(s[1:])) for s in sorted(only))]
-    _run(cmd, cwd=paths.LIB)
+    t0 = time.time()
+    try:
+        _run(cmd, cwd=paths.LIB)
+    finally:
+        _register_batch_clips(piece, t0)
     _report_cuts(piece, only)
+
+
+def _register_batch_clips(piece: Path, since: float) -> None:
+    """Record clips animate_shots wrote into versions.json as the active clip.
+
+    animate_shots writes clips/ directly. Any later prepare() rematerializes clips/ from
+    versions.json, so an unregistered clip is overwritten by the shot's older active version:
+    on 2026-10-03 one `shot ... motion` call reverted 25 restyled oceanus clips to the overnight
+    ones. Registering each new clip as it lands closes that."""
+    from . import versions
+    plan = load_plan(piece)
+    for i, s in enumerate(plan["shots"]):
+        f = piece / "clips" / f"s{i:03d}.mp4"
+        if s.get("id") and f.exists() and f.stat().st_mtime >= since:
+            versions.add_clip(piece, s["id"], f, {"kind": "h3", "backend": "batch"}, sync=False)
 
 
 def _report_cuts(piece: Path, only: set | None = None) -> None:
@@ -399,13 +581,217 @@ def _report_cuts(piece: Path, only: set | None = None) -> None:
                           if found else "no invented cuts"))
 
 
+ENDFRAME_LOOK = "loose painted figures, no photographic detail"
+# (pattern on the shot's motion, (crop size, x0, y0) as fractions of the still). First match wins.
+# A size of 1.0 means the camera ends where it started: the still itself is the end frame.
+# None means no end frame; "out" means paint the still outward (a pull back).
+END_CROPS = [
+    # A pull back ends on ground the still does not show, so its end frame is the still shrunk into
+    # a wider canvas that Qwen paints out ("out"). With no end frame H3 cut to a photographic
+    # close-up of hands (oceanus s038, 2026-10-03).
+    (r"pull(s|ing)? (back|out)|widen", "out"),
+    # an arc ends on a side of the subject the still does not show; a cropped end frame fought
+    # the move and H3 invented a second cook and a steamship to bridge them (oceanus s023).
+    # The still itself as end frame keeps the look and shrinks the arc to a sway.
+    (r"\barc|orbit|around (him|her|it|the)", (1.0, 0.0, 0.0)),
+    (r"static|locked|hold", (1.0, 0.0, 0.0)),
+    (r"pan.*left|left\b.*(drift|glide|track)|(drift|glide|track).*left", (0.80, 0.0, 0.10)),
+    (r"pan.*right|right\b.*(drift|glide|track)|(drift|glide|track).*right|drift|across", (0.80, 0.20, 0.10)),
+    (r"tilt up|crane up|rise|up the", (0.80, 0.10, 0.0)),
+    (r"tilt down|crane down|down from|sink|following him down", (0.80, 0.10, 0.20)),
+    (r"push|close|toward|in on|into", (0.70, 0.15, 0.15)),
+]
+
+
+def end_crop(shot: dict) -> tuple:
+    """Where the camera ends, as a crop of the still. The plan can set end_crop: [size, x0, y0]."""
+    if shot.get("end_crop"):
+        return tuple(shot["end_crop"])
+    m = (shot.get("motion") or "").lower()
+    for pat, c in END_CROPS:
+        if re.search(pat, m):
+            return c
+    return (0.85, 0.075, 0.075)
+
+
+MID_GUIDE_MIN_FRAMES = 160   # ~6.7 s; shorter clips held between first and last alone
+
+
+def mid_frame(n: int) -> int:
+    return n // 2
+
+
+def mid_keyframe(still: Path, shot: dict, out: Path) -> Path:
+    """A middle keyframe halfway along the camera move: half the end crop of the painted still.
+    No repaint: a crop of a painting is still a painting, and this only has to stop H3 wandering
+    (a tavern turned into a beach mid-clip, oceanus s025). Pull backs and arcs use the still."""
+    crop = end_crop(shot)
+    ff = _animate().find_ffmpeg()
+    if not isinstance(crop, tuple) or crop[0] >= 1.0:
+        shutil.copy2(still, out)
+        return out
+    size, x0, y0 = crop
+    hs, hx, hy = (1 + size) / 2, x0 / 2, y0 / 2
+    _run([ff, "-y", "-v", "error", "-i", still,
+          "-vf", f"crop=iw*{hs}:ih*{hs}:iw*{hx}:ih*{hy},scale={STILL_W}:{STILL_H}:flags=lanczos", out])
+    return out
+
+
+def endframes(piece: Path, only: set | None = None, model: str | None = None, **_) -> None:
+    """A painted LAST keyframe per shot, at endframes/sNNN.png, for H3's last_frame input.
+
+    Measured 2026-10-03 (oceanus_directed): with the first frame only, H3 turned close-ups and
+    newly revealed ground photographic inside the clip on a painted piece; s010, s017 and s035
+    re-rendered with a pinned painted end frame held the look to the last frame. The still is
+    cropped to where the camera ends and a Qwen-2.1 edit repaints the crop in the piece's look.
+    Only pieces with a motion_style (drawn or painted) get them. Shots with an end frame on disk
+    are skipped, so a stopped run resumes; delete a file to remake it.
+    """
+    compiled = json.loads((piece / "shots.json").read_text(encoding="utf-8"))
+    out = piece / "endframes"
+    out.mkdir(exist_ok=True)
+    ff = _animate().find_ffmpeg()
+    bible = _animate().style_bible(piece)   # the same look the H3 prompt asks for, when set
+    work = piece / "_work" / f"endframes_{_stamp()}"
+    work.mkdir(parents=True, exist_ok=True)
+    todo = []
+    for s in compiled:
+        sid = f"s{s['i']:03d}"
+        still = piece / "stills" / f"{sid}.png"
+        if (only and sid not in only) or s.get("cuts") or (out / f"{sid}.png").exists() \
+                or not still.exists():
+            continue
+        if s.get("end"):
+            job = _designed_end(s, still, work, ff)
+            if job:
+                todo.append((sid, *job))
+            continue
+        if not s.get("motion_style"):
+            continue
+        crop = end_crop(s)
+        if crop is None:
+            continue
+        look = (f"{bible['style']}. {bible['texture']}" if bible else
+                (s.get("still_prompt") or s["motion_style"])).strip().rstrip(",. ")
+        if crop == "out":
+            c = work / f"{sid}_out.png"
+            k = 0.72
+            _run([ff, "-y", "-v", "error", "-i", still, "-vf",
+                  f"scale=iw*{k}:ih*{k},pad={STILL_W}:{STILL_H}:(ow-iw)/2:(oh-ih)/2:color=0x808080", c])
+            todo.append((sid, c, f"This painting sits in the middle of a flat grey border. Paint over the grey "
+                                 "border by extending the scene outward on every side, as the same scene seen "
+                                 f"from further back, as {look}, {ENDFRAME_LOOK}. Keep the middle exactly as "
+                                 "it is. No grey left, no border, no picture frame, no lettering."))
+            continue
+        size, x0, y0 = crop
+        if size >= 1.0:
+            shutil.copy2(still, out / f"{sid}.png")
+            continue
+        c = work / f"{sid}_crop.png"
+        _run([ff, "-y", "-v", "error", "-i", still,
+              "-vf", f"crop=iw*{size}:ih*{size}:iw*{x0}:ih*{y0},scale={STILL_W}:{STILL_H}:flags=lanczos", c])
+        todo.append((sid, c, f"Repaint this image as {look}, {ENDFRAME_LOOK}. Keep the composition, the "
+                             "figures, their poses and the colours exactly as they are; only the surface "
+                             "becomes painted. No border, no picture frame, no lettering."))
+    if not todo:
+        shutil.rmtree(work, ignore_errors=True)
+        _say("endframes: nothing to paint")
+        return
+    if DRY:
+        for sid, c, _p in todo:
+            shutil.copy2(c, out / f"{sid}.png")
+        shutil.rmtree(work, ignore_errors=True)
+        return
+    if str(paths.FARM) not in sys.path:
+        sys.path.insert(0, str(paths.FARM))
+    import graphs  # noqa: E402
+    from dispatch import Farm, Job  # noqa: E402
+    cfg = json.loads((piece / "config.json").read_text(encoding="utf-8"))
+    base = int(cfg.get("seed", 31337))
+    # seed: never the still's own (noise replay, see EDIT_RES); the old fixed seed=7 was one piece-wide
+    jobs = [Job(job_id=f"{sid}_end", model_key="qwen21", out_name=f"{sid}_end", inputs=[c],
+                graph=graphs.qwen21_edit(p, [c.name], steps=25, resolution=EDIT_RES,
+                                         seed=edit_seed(base, 1000 + int(sid[1:])),
+                                         prefix=f"{sid}_end_{int(time.time())}",
+                                         variant=still_model(piece, model)))
+            for sid, c, p in todo]
+    _say(f"endframes: painting {len(jobs)}")
+    farm("pair")
+    f = Farm(work, job_timeout=1800)
+    f.LOAD_MIN_FREE_GB = 8.0
+    # without this every end frame waited the RAM gate's full 300 s for a 36 s render (gardening,
+    # 7.4 GB free with the worker warm, 2026-10-11), the same trap stills() closed on 2026-09-24
+    f.LOAD_STAGGER_S = 20.0
+    _gate_first_load_only(f)
+    designed = {s_["i"] for s_ in compiled if s_.get("end")}
+    for d in f.run(jobs):
+        if d.status == "ok" and d.files:
+            sid = d.job_id[:-4]
+            dest = out / f"{sid}.png"
+            shutil.copy2(work / d.files[0], dest)
+            _fit(dest)
+            if int(sid[1:]) in designed:
+                _match_colour(piece / "stills" / f"{sid}.png", dest)
+                p = next(p for s_, _c, p in todo if s_ == sid)
+                (out / f"{sid}.json").write_text(json.dumps({"prompt": p, "seconds": round(d.seconds, 1)},
+                                                            indent=1, ensure_ascii=False), encoding="utf-8")
+        else:
+            _say(f"endframe {d.job_id} failed: {d.error}")
+    shutil.rmtree(work, ignore_errors=True)
+
+
+def _designed_end(s: dict, still: Path, work: Path, ff: str) -> tuple | None:
+    """The shot's planned last frame (director_kb/12_prompt_endframe.md), as (input png, edit prompt).
+
+    end: {"kind": "none" | "state" | "target" | "crop" | "state+crop", "change": str, "crop": [size, x0, y0]}
+    A crop is cut first (where the camera ends) and the one edit then does the change and restores
+    full detail, so a crop never reaches H3 soft. The preservation line names the medium: a painted
+    piece (motion_style set) is "this painting", anything else "this photograph"."""
+    e = s["end"]
+    kind = e.get("kind", "state")
+    if kind == "none":
+        return None
+    medium = "painting" if s.get("motion_style") else "photograph"
+    sid = f"s{s['i']:03d}"
+    c = work / f"{sid}_endin.png"
+    crop = e.get("crop") or (end_crop(s) if "crop" in kind else None)
+    if "crop" in kind and isinstance(crop, (list, tuple)) and crop[0] < 1.0:
+        size, x0, y0 = crop
+        _run([ff, "-y", "-v", "error", "-i", still,
+              "-vf", f"crop=iw*{size}:ih*{size}:iw*{x0}:ih*{y0},scale={STILL_W}:{STILL_H}:flags=lanczos", c])
+    else:
+        shutil.copy2(still, c)
+    change = " ".join((e.get("change") or "").split()).rstrip(". ")
+    if change:
+        p = (f"{change}. Keep everything else exactly as in this {medium}: the framing, the people's "
+             "identity and clothing, the setting, the light and the colour.")
+    else:
+        p = (f"This {medium} is a crop of a larger frame; render it at full sharp detail as the same "
+             f"{medium}. Change nothing: keep the framing, the people's identity, clothing and pose, the "
+             "setting, the light and the colour exactly as they are.")
+    return c, p
+
+
+def _match_colour(ref: Path, img: Path) -> None:
+    """Per-channel mean and spread of img moved to ref's in YCbCr, so the last frame carries the
+    still's exposure and colour (the Oceanus v3 pulse tracked a luma/saturation gap, endframe_mismatch.py)."""
+    import numpy as np
+    from PIL import Image
+    a = np.asarray(Image.open(ref).convert("YCbCr"), dtype=np.float32)
+    b = np.asarray(Image.open(img).convert("YCbCr"), dtype=np.float32)
+    for ch in range(3):
+        bs = b[..., ch].std() or 1.0
+        b[..., ch] = (b[..., ch] - b[..., ch].mean()) / bs * a[..., ch].std() + a[..., ch].mean()
+    Image.fromarray(np.clip(b, 0, 255).astype(np.uint8), "YCbCr").convert("RGB").save(img)
+
+
 def assemble(piece: Path, **_) -> None:
     _run([paths.PODCAST_PY, paths.LIB / "assemble_film.py", piece], cwd=paths.LIB)
 
 
 FUNCS = {"compile": compile_stage, "narrate": narrate, "clay": clay, "stills": stills,
-         "motion": motion, "assemble": assemble}
-GPU_STAGES = {"narrate", "stills", "motion"}
+         "endframes": endframes, "motion": motion, "assemble": assemble}
+GPU_STAGES = {"narrate", "stills", "endframes", "motion"}
 
 
 # -- one GPU user at a time ---------------------------------------------------------------------
@@ -622,7 +1008,8 @@ def edit_prompt(instruction: str) -> str:
     return f"{ins[0].upper()}{ins[1:]}. {EDIT_TAIL}"
 
 
-def render_stills(piece, specs: list[dict], on_start=None, strict: bool = True) -> list[dict]:
+def render_stills(piece, specs: list[dict], on_start=None, strict: bool = True,
+                  model: str | None = None) -> list[dict]:
     """Render several stills in one farm batch (the pair runs two at once).
 
     spec: {"ref": "s003" or id, "kind": "redo" | "edit", "seed": int|None, "prompt": str|None,
@@ -630,16 +1017,41 @@ def render_stills(piece, specs: list[dict], on_start=None, strict: bool = True) 
     redo on a clay shot re-uses the clay pass (re-rendering it first if the geometry changed);
     redo on a free shot is text-to-image; edit runs a Qwen-2.1 edit on an existing still.
     Each returned item carries k, its spec's index. strict=False returns failed specs as
-    {"k", "sid", "id", "error"} items instead of raising."""
+    {"k", "sid", "id", "error"} items instead of raising. model: see still_model()."""
     piece = piece_dir(str(piece))
     with piece_lock(piece):
         todo, work = _still_todo(piece, specs)
-    return _render_todo(piece, todo, work, on_start, strict)
+    return _render_todo(piece, todo, work, on_start, strict, still_model(piece, model))
+
+
+def _direction_gate(piece: Path, cfg: dict) -> None:
+    """A directed piece renders no stills until its animatic has been watched and signed off."""
+    if not cfg.get("direction_hash"):
+        return
+    from . import direct
+    why = direct.animatic_gate(piece, cfg["direction_hash"])
+    if why:
+        raise RuntimeError(why)
+
+
+def _stage_refs(refs: list, into: Path, name: str) -> list[Path]:
+    """Copy reference images under names unique to this job, so the farm's input dir never
+    serves one shot's location plate to another."""
+    into.mkdir(parents=True, exist_ok=True)
+    out = []
+    for k, r in enumerate(refs):
+        src = Path(r)
+        dest = into / f"{name}_r{k}{src.suffix.lower() or '.png'}"
+        shutil.copy2(src, dest)
+        out.append(dest)
+    return out
 
 
 def _still_todo(piece: Path, specs: list[dict]) -> tuple[list[dict], Path]:
     from . import versions
     piece, plan = prepare(piece)
+    if plan.get("direction_hash"):
+        _direction_gate(piece, {"direction_hash": plan["direction_hash"]})
     base_seed = int(plan.get("seed", 31337))
     work = piece / "_work" / f"stills_{_stamp()}"
     work.mkdir(parents=True, exist_ok=True)
@@ -661,6 +1073,13 @@ def _still_todo(piece: Path, specs: list[dict]) -> tuple[list[dict], Path]:
             t.update(kind="edit", prompt=edit_prompt(sp.get("prompt", "")), src=src, inputs=[src],
                      meta={"instruction": sp.get("prompt", ""), "parent": base["v"],
                            "shot_key": base.get("shot_key")})
+        elif schema.shot_mode(s) == "free" and s.get("refs") and not sp.get("prompt") and False:
+            # Disabled 2026-10-10: this one-pass refs edit puts the location plate in image_1, the
+            # edit canvas, so the shot comes back as the empty plate. Studio redos of reference shots
+            # fall through to text-to-image; the batch stills() stage does the two-pass version.
+            inputs = _stage_refs(s["refs"], work, name)
+            t.update(kind="refs", prompt=s["ref_prompt"], src=inputs[0], inputs=inputs,
+                     meta={"shot_key": versions.still_key(plan, s)})
         elif schema.shot_mode(s) == "free":
             t.update(kind="free", prompt=sp.get("prompt") or schema.free_prompt(plan, s), src=None,
                      meta={"shot_key": versions.still_key(plan, s)})
@@ -676,7 +1095,8 @@ def _still_todo(piece: Path, specs: list[dict]) -> tuple[list[dict], Path]:
     return todo, work
 
 
-def _render_todo(piece: Path, todo: list[dict], work: Path, on_start=None, strict: bool = True) -> list[dict]:
+def _render_todo(piece: Path, todo: list[dict], work: Path, on_start=None, strict: bool = True,
+                 variant: str = "base") -> list[dict]:
     from . import versions
     if on_start:
         on_start([{"sid": t["sid"], "id": t["uid"], "kind": t["kind"], "seed": t["seed"],
@@ -697,10 +1117,16 @@ def _render_todo(piece: Path, todo: list[dict], work: Path, on_start=None, stric
         for t in todo:
             if t["kind"] == "free":
                 g = graphs.qwen21_t2i(t["prompt"], width=STILL_W, height=STILL_H, steps=T2I_STEPS,
-                                      seed=t["seed"], prefix=t["name"])
+                                      seed=t["seed"], prefix=t["name"], variant=variant)
+            elif t["kind"] == "refs":
+                g = graphs.qwen21_edit(t["prompt"], [x.name for x in t["inputs"]], steps=T2I_STEPS,
+                                       resolution=EDIT_RES, seed=edit_seed(t["seed"], t["i"]),
+                                       prefix=t["name"], variant=variant)
             else:
-                g = graphs.qwen21_edit(t["prompt"], [t["src"].name], steps=STILL_STEPS, resolution=0,
-                                       seed=t["seed"], prefix=t["name"])
+                # an edit of an existing still or a clay pass: a seed of its own (noise replay, EDIT_RES)
+                g = graphs.qwen21_edit(t["prompt"], [t["src"].name], steps=STILL_STEPS, resolution=EDIT_RES,
+                                       seed=edit_seed(t["seed"], t["i"]) if t["kind"] == "edit" else t["seed"],
+                                       prefix=t["name"], variant=variant)
             jobs.append(Job(job_id=t["name"], graph=g, model_key="qwen21", out_name=t["name"],
                             inputs=t["inputs"], meta={"sid": t["sid"], "kind": t["kind"]}))
         with gpu_lock(f"stills {piece.name}"):
@@ -721,6 +1147,7 @@ def _render_todo(piece: Path, todo: list[dict], work: Path, on_start=None, stric
             for d in f.run(jobs):
                 if d.status == "ok" and d.files:
                     results[d.job_id] = work / d.files[0]
+                    _fit(results[d.job_id])   # edits come back at EDIT_RES's size
                 else:
                     errors[d.job_id] = d.error or "no output"
     items, failed = [], []
@@ -732,7 +1159,7 @@ def _render_todo(piece: Path, todo: list[dict], work: Path, on_start=None, stric
             items.append({"k": t["k"], "sid": t["sid"], "id": t["uid"], "error": err})
             continue
         meta = {"kind": t["kind"], "seed": t["seed"], "prompt": t["prompt"],
-                "backend": "dry" if DRY else "farm", **t["meta"]}
+                "backend": "dry" if DRY else "farm", "model": variant, **t["meta"]}
         item = versions.add_still(piece, t["uid"], f, meta)
         items.append({"k": t["k"], "sid": t["sid"], "id": t["uid"], **item})
         _say(f"{t['sid']} still v{item['v']} ({t['kind']}, seed {t['seed']})")
@@ -742,16 +1169,16 @@ def _render_todo(piece: Path, todo: list[dict], work: Path, on_start=None, stric
     return items
 
 
-def still_one(piece, sid, seed=None, prompt=None, on_start=None) -> dict:
+def still_one(piece, sid, seed=None, prompt=None, on_start=None, model=None) -> dict:
     """A new still for one shot from its clay pass (clay mode) or from text (free mode)."""
     return render_stills(piece, [{"ref": sid, "kind": "redo", "seed": seed, "prompt": prompt}],
-                         on_start=on_start)[0]
+                         on_start=on_start, model=model)[0]
 
 
-def edit_still(piece, sid, prompt, seed=None, base_v=None, on_start=None) -> dict:
+def edit_still(piece, sid, prompt, seed=None, base_v=None, on_start=None, model=None) -> dict:
     """A Qwen-2.1 edit of one shot's active still (or version base_v) by a plain instruction."""
     return render_stills(piece, [{"ref": sid, "kind": "edit", "seed": seed, "prompt": prompt,
-                                  "base_v": base_v}], on_start=on_start)[0]
+                                  "base_v": base_v}], on_start=on_start, model=model)[0]
 
 
 def _animate():
@@ -767,7 +1194,11 @@ def compiled_shot(piece: Path, i: int) -> dict:
 
 
 def auto_motion_prompt(compiled: dict) -> str:
-    """What animate_shots would send H3 for this shot, ignoring any hand-written override."""
+    """What would be sent H3 for this shot, ignoring any hand-written override: the director's motion
+    plan through the translator when the shot has one, else what animate_shots builds."""
+    if compiled.get("motion_plan"):
+        from .motion_direction import compile_prompt
+        return compile_prompt(compiled)[0]
     return _animate().prompt_for({k: v for k, v in compiled.items() if k != "motion_prompt"})
 
 
@@ -785,68 +1216,11 @@ def shot_seconds(piece: Path, i: int, narration: str, tail_s: float = 0.0) -> fl
 
 def motion_one(piece, sid, prompt_override: str | None = None, seed=None, on_start=None) -> dict:
     """One H3 clip from the shot's active still. The prompt is, in order: prompt_override, the
-    plan's motion_prompt, what animate_shots builds. It is read when the job starts."""
-    from . import versions
-    piece = piece_dir(str(piece))
-    with piece_lock(piece):
-        piece, plan = prepare(piece)
-        i, s = resolve(plan, sid)
-        comp = compiled_shot(piece, i)
-    uid, sid = s["id"], f"s{i:03d}"
-    row = versions.load(piece)["shots"].get(uid) or {}
-    st = versions.active(row, "still") if row else None
-    if not st:
-        raise ValueError(f"{sid} has no active still; make one first")
-    an = _animate()
-    prompt = prompt_override or comp.get("motion_prompt") or an.prompt_for(comp)
-    secs = shot_seconds(piece, i, s.get("narration", ""), s.get("tail_s", 0))
-    n = an.frames_for(secs, comp)
-    seed = an.SEED + i if seed in (None, "") else int(seed)
-    if on_start:
-        on_start([{"sid": sid, "id": uid, "kind": "motion", "seed": seed, "prompt": prompt,
-                   "still_v": st["v"]}])
-    work = piece / "_work" / f"motion_{_stamp()}"
-    work.mkdir(parents=True, exist_ok=True)
-    name = f"{uid}_{_stamp()}"
-    src = work / f"{name}_still.png"
-    shutil.copy2(piece / st["file"], src)
-    meta = {"kind": "h3", "seed": seed, "prompt": prompt, "frames": n, "seconds": round(n / an.FPS, 2),
-            "want": round(secs, 2), "still_ref": st["v"],
-            "prompt_overridden": bool(prompt_override or comp.get("motion_prompt")),
-            "backend": "dry" if DRY else "farm"}
-    if DRY:
-        from . import dry
-        out = work / f"{name}.mp4"
-        dry.clip(out, i, log=_say)
-    else:
-        import config as C  # noqa: E402  (farm/, on sys.path via animate_shots)
-        from dispatch import Farm, Job  # noqa: E402
-        g = an.graphs.minimax_h3_official(
-            prompt, src.name, width=an.W, height=an.H, seconds=n / an.FPS, fps=an.FPS,
-            steps=an.STEPS, seed=seed, sparse={"tau": 1.3, "start_percent": 0.2},
-            prefix=f"{piece.name}_{name}")
-        _say(f"{sid}: H3 {n} frames, seed {seed}")
-        with gpu_lock(f"motion {piece.name} {sid}"):
-            farm("big")
-            done = Farm(work, workers=[C.BIG_WORKER], job_timeout=5400).run(
-                [Job(job_id=name, model_key="minimax_h3", out_name=name, inputs=[src], graph=g)])
-        if not done or done[0].status != "ok":
-            shutil.rmtree(work, ignore_errors=True)
-            raise RuntimeError(f"motion failed: {done[0].error if done else 'no result'}")
-        out = next(iter(sorted(work.glob(f"{name}*.mp4"))), None)
-        if out is None:
-            raise RuntimeError("motion finished but wrote no mp4")
-        gate_dir = work / "gate"
-        gate_dir.mkdir()
-        shutil.copy2(out, gate_dir / f"{sid}.mp4")
-        try:
-            meta["frozen"] = bool(an.gate(gate_dir))
-        except Exception as e:  # noqa: BLE001  the gate is a report, not a requirement
-            _say(f"motion gate skipped: {e}")
-    item = versions.add_clip(piece, uid, out, meta)
-    shutil.rmtree(work, ignore_errors=True)
-    _say(f"{sid} clip v{item['v']}")
-    return {"sid": sid, "id": uid, **item}
+    plan's motion_prompt, what animate_shots builds. It is read when the job starts.
+    The body lives in motion_batch.py (2026-10-11), split into prepare / run / register helpers that
+    the remote batch path shares. With FARM_REMOTE_WORKERS unset it runs exactly as before."""
+    from . import motion_batch
+    return motion_batch.motion_one(piece, sid, prompt_override, seed, on_start)
 
 
 def narrate_piece(piece) -> None:
@@ -867,6 +1241,12 @@ def assemble_piece(piece) -> Path:
     return piece / f"{piece.name}.mp4"
 
 
+def _remote_motion() -> bool:
+    """Motion on rented pods (FARM_REMOTE_WORKERS, farm/config.py). It takes no local GPU lock and
+    leaves the local farm alone, so a stills queue on GPU1 keeps running."""
+    return bool(os.environ.get("FARM_REMOTE_WORKERS", "").strip()) and not DRY
+
+
 def run(piece: Path, stages: list[str] | None = None, farm_after: str = "off", **kw) -> None:
     stages = stages or STAGES
     for st in stages:
@@ -878,7 +1258,7 @@ def run(piece: Path, stages: list[str] | None = None, farm_after: str = "off", *
             _say(f"=== {st} ===")
             _mark(piece, st, "running")
             t = time.time()
-            if st in GPU_STAGES:
+            if st in GPU_STAGES and not (st == "motion" and _remote_motion()):
                 with gpu_lock(f"run {piece.name} {st}"):
                     FUNCS[st](piece, **kw)
             else:
@@ -888,6 +1268,7 @@ def run(piece: Path, stages: list[str] | None = None, farm_after: str = "off", *
         _mark(piece, st, "failed", error=str(e)[-1500:])
         raise
     finally:
-        if farm_after == "off" and any(s in stages for s in ("stills", "motion")):
+        local = ("stills", "endframes") + (() if _remote_motion() else ("motion",))
+        if farm_after == "off" and any(s in stages for s in local):
             farm("off")
     _say(f"run finished in {time.time() - t0:.0f} s")

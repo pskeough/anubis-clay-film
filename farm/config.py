@@ -28,6 +28,22 @@ from pathlib import Path
 # --- roots -----------------------------------------------------------------
 
 PROJECT = Path(__file__).resolve().parent.parent
+
+
+def _load_env() -> None:
+    """The repo-root .env (clay_film/envfile.py), loaded by file path so this module stays
+    importable on its own; variables already in the environment win. No-op without the file."""
+    f = PROJECT / "clay_film" / "envfile.py"
+    if not f.is_file():
+        return
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_clay_film_envfile", f)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.load()
+
+
+_load_env()
 COMFY_ROOT = Path(os.environ.get("COMFY_ROOT", r"C:\ComfyUI"))
 COMFY_PYTHON = COMFY_ROOT / "venv" / "Scripts" / "python.exe"
 COMFY_MAIN = COMFY_ROOT / "main.py"
@@ -133,6 +149,9 @@ MODELS = {
     # ignored), euler/simple, 25 working steps, no Lightning/angle LoRAs (those
     # are 2509-only and will not load). See Image_Edit/QWEN_IMAGE_2.1_PROMPTING.md.
     "qwen21_unet": "qwen_image_2.1_int8_convrot.safetensors",
+    # Qwen-Image-2.1-Turbo (official, 2026-10-09), Comfy-Org int8 repack, sha256
+    # verified 2026-10-10. Same encoder and VAE. graphs.qwen21_* variant="turbo".
+    "qwen21_turbo_unet": "qwen_image_2.1_turbo_int8_convrot.safetensors",
     "qwen21_clip": "qwen3vl_8b_w4a8.safetensors",
     "qwen21_vae": "qwen_image_2.1_vae_bf16.safetensors",
     # Anything2Real Alpha, built for Qwen-Image-Edit-2509. Trained to
@@ -175,6 +194,31 @@ def worker_dirs(name: str) -> dict[str, Path]:
     }
 
 
+# --- remote workers (opt-in, 2026-10-11) ------------------------------------
+# FARM_REMOTE_WORKERS="pod1:9301,pod2:9302" lists rented ComfyUIs reached through SSH tunnels
+# (ssh -L 9301:127.0.0.1:8188 on each pod). Each entry is name:port, or name@host:port.
+# When it is set, live_workers() returns only these, and dispatch.Farm skips the local RAM gate,
+# the one-device warning and the local output cleanup for them. Unset, nothing changes.
+REMOTE_ENV = "FARM_REMOTE_WORKERS"
+REMOTE_REFUSED_PORTS = {8188, 8190, 8191, 8192}
+
+
+def remote_workers(spec: str | None = None) -> list[dict]:
+    spec = os.environ.get(REMOTE_ENV, "") if spec is None else spec
+    out = []
+    for item in [x.strip() for x in spec.split(",") if x.strip()]:
+        name, _, addr = item.rpartition(":")
+        name, _, host = name.partition("@")
+        if not name or not addr.isdigit():
+            raise ValueError(f"{REMOTE_ENV} entry {item!r}: use name:port or name@host:port")
+        port = int(addr)
+        if port in REMOTE_REFUSED_PORTS:
+            raise ValueError(f"{REMOTE_ENV} entry {item!r}: port {port} is a local farm or shared port")
+        out.append({"name": name, "device": "remote", "port": port,
+                    "host": host or "127.0.0.1", "remote": True})
+    return out
+
+
 def live_workers(timeout: float = 2.0) -> list[dict]:
     """Whichever workers are actually answering, big one first.
 
@@ -188,6 +232,11 @@ def live_workers(timeout: float = 2.0) -> list[dict]:
     error rather than an empty job list that silently renders zero shots.
     """
     import urllib.request
+
+    if os.environ.get(REMOTE_ENV, "").strip():
+        # remote mode: only the tunnels, never a local card; unreachable ones are left for
+        # dispatch.Farm to report and skip
+        return remote_workers()
 
     alive = []
     for w in [BIG_WORKER] + WORKERS:

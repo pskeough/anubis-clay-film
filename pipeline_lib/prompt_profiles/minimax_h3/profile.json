@@ -1,0 +1,87 @@
+{
+  "model": "minimax_h3",
+  "display": "MiniMax H3 (FL2VA / I2VA, ComfyUI MiniMaxH3ImageToVideo)",
+  "source": "guide/VIDEO_PROMPT_WRITING_GUIDE_base_en.md (HuggingFace MiniMaxAI/MiniMax-H3 docs/, fetched 2026-10-03); style blocks from guide/skill_handdrawn.md",
+  "builder": "sectioned",
+
+  "alignment": {
+    "i2va": "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.",
+    "fl2va": "How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot {last_shot}) aligns with the {seconds:.2f}-second mark of the target video.",
+    "l2va": "How the reference pictures align with the target video — <Picture 1> (from [Shot {last_shot}]) aligns with the {seconds:.2f}-second mark of the target video.",
+    "first_line": true,
+    "blank_line_after": true
+  },
+
+  "fields": [
+    {"name": "integrated_multimodal_description", "content": "description"},
+    {"name": "overall_soundscape", "content": "soundscape", "empty": "Quiet room tone with a faint movement of air."},
+    {"name": "non_diegetic_music", "content": "music", "empty": "N/A"}
+  ],
+  "field_separator": "\n\n",
+
+  "description": {
+    "shot_label": "[Shot {n}]",
+    "first_shot_timestamp": false,
+    "later_shot_prefix": "At {mm}:{ss:06.3f}, the camera cuts to",
+    "order": ["style", "anchor", "texture", "path", "landing", "prohibitions"],
+    "anchor": {
+      "i2va": "{subject} begins exactly as shown in <Picture 1>, preserving its composition, colours, {surface} and every figure's position: {scene}.",
+      "fl2va": "{subject} begins in the composition, colours and {surface} established by Picture 1: {scene}."
+    },
+    "landing": {
+      "i2va": "",
+      "fl2va": "Toward the end of the shot the movement slows and settles into the composition, {surface} and framing established by Picture 2."
+    }
+  },
+
+  "camera": {
+    "grammar": "{verb} with {amplitude} amplitude at {speed} speed{toward}",
+    "verbs": {
+      "push in": "The camera pushes in", "pull out": "The camera pulls out", "pull back": "The camera pulls out",
+      "zoom in": "The camera zooms in", "zoom out": "The camera zooms out",
+      "pan left": "The camera pans left", "pan right": "The camera pans right",
+      "truck left": "The camera trucks left", "truck right": "The camera trucks right",
+      "track left": "The camera trucks left", "track right": "The camera trucks right",
+      "tilt up": "The camera tilts up", "tilt down": "The camera tilts down",
+      "pedestal up": "The camera pedestals up", "pedestal down": "The camera pedestals down",
+      "crane up": "The camera pedestals up", "crane down": "The camera pedestals down",
+      "rise": "The camera pedestals up", "arc": "The camera moves in an arc shot",
+      "follow": "The camera follows in a tracking shot", "drift": "The camera trucks",
+      "static": "The camera holds a static shot", "hold": "The camera holds a static shot"
+    },
+    "default_amplitude": "small",
+    "default_speed": "slow"
+  },
+
+  "style": {
+    "slot": "start of [Shot 1], before the anchor",
+    "examples": ["Live-action, cinematic", "2D-animated", "watercolor", "claymation", "vintage film"],
+    "derive_from_reference": true
+  },
+
+  "negatives": {
+    "supported": false,
+    "why": "Released FL2VA/Ref2VA checkpoints are CFG-distilled; BasicGuider carries positive conditioning only.",
+    "method": "in_prompt",
+    "phrasing": "One to three concrete 'No ...' sentences, observable on screen, placed at the end of the shot description."
+  },
+
+  "length": {"min_words": 140, "target_words": 260, "max_words": 900},
+
+  "rules": [
+    {"id": "alignment-first", "check": "first_line_is_alignment", "why": "guide 2.1: the instruction must be the first line, followed by one blank line"},
+    {"id": "fields-order", "check": "fields_in_order", "why": "guide 2.2"},
+    {"id": "pictures-match-images", "check": "picture_count_matches", "why": "fl2va splices one <Picture i> block per keyframe; the text must name the same pictures"},
+    {"id": "style-first", "check": "style_at_shot1_start", "why": "guide 4.1: state the overall style at the beginning of [Shot 1]"},
+    {"id": "no-content-in-locks", "check": "lock_lines_have_no_content_nouns",
+     "nouns": ["face", "faces", "hand", "hands", "mouth", "mouths", "lips", "water", "sky", "sea", "window", "porthole", "beach"],
+     "why": "oceanus 2026-10-03: nouns in the style/hold lines were painted as content (men in an empty shot, a cut to hands, interiors sent out to sea)"},
+    {"id": "no-literal-colour-on-skin", "check": "regex_absent",
+     "pattern": "\\b(blue|red|green|grey|gray)\\b[^.]{0,30}\\b(lips|skin|cheeks|face)\\b",
+     "why": "colour words on skin are painted literally (blue lips, blue-grey eyes, oceanus s026/s033)"},
+    {"id": "no-look-toward-offscreen", "check": "regex_absent",
+     "pattern": "\\b(turns|looks|glances)\\b[^.]{0,40}\\btoward (the )?(porthole|window|door|horizon)",
+     "why": "looking toward an opening is read as a cue to cut to the view (oceanus s023)"},
+    {"id": "length", "check": "word_count_in_range"}
+  ]
+}

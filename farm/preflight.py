@@ -205,7 +205,7 @@ def main() -> int:
     if args.json:
         print(json.dumps({"failed": rep.failed, "checks": rep.rows}, indent=2))
     else:
-        print("\nPreflight - Agentic_Slop_MP4 farm\n")
+        print("\nPreflight - ComfyUI farm\n")
         print(rep.render())
         print("\n  " + ("BLOCKED" if rep.failed else "clear to launch") + "\n")
     return 1 if rep.failed else 0

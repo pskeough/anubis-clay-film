@@ -117,7 +117,7 @@ export type Col = number | [number, number, number];
 
 interface Sink {
   poly(pts: Vec2[], s: Stroke): void;
-  fill(pts: Vec2[], col: Col): void;
+  fill(pts: Vec2[], col: Col, seal?: boolean): void;
   circle(c: Vec2, r: number, s: Stroke): void;
   disc(c: Vec2, r: number, col: Col): void;
   text(at: Vec2, str: string, size: number): void;
@@ -211,7 +211,7 @@ class CanvasSink implements Sink {
     for (let i = 1; i < pts.length; i++) this.ctx.lineTo(pts[i][0], pts[i][1]);
     this.ctx.stroke();
   }
-  fill(pts: Vec2[], col: Col) {
+  fill(pts: Vec2[], col: Col, seal = false) {
     if (pts.length < 3) return;
     this.ctx.setLineDash([]);
     this.ctx.fillStyle = hex(col);
@@ -220,6 +220,15 @@ class CanvasSink implements Sink {
     for (let i = 1; i < pts.length; i++) this.ctx.lineTo(pts[i][0], pts[i][1]);
     this.ctx.closePath();
     this.ctx.fill();
+    // Seal the anti-aliased edge. Adjacent cells of one surface are separate polygons, and each
+    // one's half-covered edge pixels let the face behind show through, which drew a light grid over
+    // every wall and floor of the clay; the photoreal edit then kept that grid as tile seams.
+    if (seal) {
+      this.ctx.strokeStyle = hex(col);
+      this.ctx.lineWidth = 1;
+      this.ctx.lineJoin = "round";
+      this.ctx.stroke();
+    }
   }
   disc(c: Vec2, r: number, col: Col) {
     if (!(r > 0.4)) return;
@@ -1039,7 +1048,7 @@ function emitFaces(
     drawable.push({ pts: clipped.map((p) => project(p, b, W, H)), grey, depth });
   }
   drawable.sort((x, y) => y.depth - x.depth);
-  for (const d of drawable) sink.fill(d.pts, d.grey);
+  for (const d of drawable) sink.fill(d.pts, d.grey, clay);
 }
 
 /** Every practical in the room. Shading from one hardcoded lamp means adding a second light to a
@@ -1384,9 +1393,34 @@ const lensToFovH = (mm: number) => (2 * Math.atan(36 / (2 * mm)) * 180) / Math.P
  * angle, direction from the azimuth; then the aim is corrected so the subject lands where asked.
  * The correction loop is what makes `place` trustworthy rather than approximate.
  */
+/**
+ * Shot sizes on a PERSON, as the part of the body the frame holds: [top-down span as a fraction of
+ * the figure's height, centre of that span as a fraction of height, how much of the frame height
+ * the span fills]. SHOT_SIZE alone sized every person shot on the whole figure, so a "close" was the
+ * full body at 90% of the frame and the clay behind a close-up was a full-figure view of the room:
+ * the background came out at the wrong scale and the aim sat at the waist (Gardening diner, 2026-10-11).
+ */
+const FIGURE_FRAME: Record<string, [number, number, number]> = {
+  ECU: [0.22, 0.90, 1.0], CU: [0.40, 0.82, 0.95], MCU: [0.52, 0.76, 0.95],
+  MS: [0.66, 0.68, 0.95], MLS: [0.85, 0.57, 0.95],
+};
+
 export function solveCamera(f: Framing, space: SpaceSpec, figures: FigureSpec[], W: number, H: number): CameraSpec {
-  const { c: subj, h: subjH } = subjectSolid(f, space, figures);
-  const frac = SHOT_SIZE[f.size ?? "MS"] ?? SHOT_SIZE.MS;
+  const solid = subjectSolid(f, space, figures);
+  let subj = solid.c, subjH = solid.h;
+  let frac = SHOT_SIZE[f.size ?? "MS"] ?? SHOT_SIZE.MS;
+  const fig = typeof f.subject === "string" ? figures.find((x) => x.id === f.subject) : undefined;
+  // Off by default, measured 2026-10-11 (3-shot still A/B, Gardening diner/RV/home). Head-and-chest
+  // clay frames did not make tighter stills: Qwen recomposed them wide again, and with one surface
+  // filling the clay it lost its anchor and reinvented the room (the home lamp changed). The
+  // whole-figure clay keeps the room as context and is the better base. CLAY_FIGURE_FRAME=1 turns it on.
+  const ff = fig && process.env.CLAY_FIGURE_FRAME === "1" ? FIGURE_FRAME[f.size ?? "MS"] : undefined;
+  if (fig && ff) {
+    const h = fig.height ?? 1.7;
+    subj = [fig.at[0], h * ff[1], fig.at[1]];
+    subjH = h * ff[0];
+    frac = ff[2];
+  }
   const az = ((f.azimuth ?? 0) * Math.PI) / 180;
   const pad = 0.14;
   const camY = Math.max(pad, Math.min(space.room.h - pad, ANGLE_HEIGHT[f.angle ?? "eye"] ?? ANGLE_HEIGHT.eye));
@@ -1700,6 +1734,118 @@ export function renderPasses(shot: ShotSpec, space: SpaceSpec) {
   const p = rasterise(collectFaces(shot, space), b, W, H);
   const range = depthRange(space.room, space);
   return { depth: depthPng(p, W, H, range), normal: normalPng(p, W, H), edge: edgePng(p, W, H), passes: p, W, H };
+}
+
+/** A figure's bone rig as solids, for the two-pass still: an octagonal prism per bone and a sphere
+ *  for the head, both windings emitted so culling never opens a hole. It is the mask (the outline a
+ *  seated or reaching body actually covers, where collectFaces' 0.46 x h x 0.3 box is a slab) and the
+ *  lit clay mannequin the still model is asked to replace. A flat grey blob there gave the model no
+ *  head to aim at: gardening p01 s001 came back with a headless body (2026-10-11). */
+function figureFaces(f: FigureSpec, owner: string, base = 0.5): Face[] {
+  const H = f.height ?? 1.7;
+  const g = figureGeom(f);
+  const out: Face[] = [];
+  const both = (q: Vec3[]) => {
+    const n = faceNormal(q);
+    out.push({ pts: q, n, base, owner }, { pts: q, n: mul(n, -1), base, owner });
+  };
+  const SIDES = 8;
+  const prism = (a0: Vec3, c0: Vec3, r: number) => {
+    const d = norm(sub(c0, a0));
+    const a = sub(a0, mul(d, r * 0.6)), c = add(c0, mul(d, r * 0.6));   // overlap at the joints
+    const ref: Vec3 = Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    const u = norm(cross(d, ref)), v = norm(cross(d, u));
+    const ring = (p: Vec3): Vec3[] => Array.from({ length: SIDES }, (_, i) => {
+      const t = (2 * Math.PI * i) / SIDES;
+      return add(p, add(mul(u, r * Math.cos(t)), mul(v, r * Math.sin(t))));
+    });
+    const A = ring(a), B = ring(c);
+    both(A); both(B);
+    for (let i = 0; i < SIDES; i++) both([A[i], A[(i + 1) % SIDES], B[(i + 1) % SIDES], B[i]]);
+  };
+  // radii as a fraction of standing height: torso, shoulder and hip bars, upper and lower limbs
+  const R: Record<string, number> = {
+    "neck-hip": 0.085, "shL-shR": 0.045, "hip-hpL": 0.065, "hip-hpR": 0.065,
+    "neck-shL": 0.045, "neck-shR": 0.045, "shL-elL": 0.032, "shR-elR": 0.032,
+    "elL-hnL": 0.027, "elR-hnR": 0.027, "hpL-knL": 0.048, "hpR-knR": 0.048, "knL-ftL": 0.036, "knR-ftR": 0.036,
+  };
+  BONES.forEach(([a, b], i) => prism(g.bones[i][0], g.bones[i][1], (R[`${a}-${b}`] ?? 0.04) * H));
+  // head: a UV sphere, slightly taller than wide
+  const hc = g.head.c, hr = HEAD_R * H, LAT = 6, LON = 10;
+  const at = (i: number, j: number): Vec3 => {
+    const th = (Math.PI * i) / LAT, ph = (2 * Math.PI * j) / LON;
+    return [hc[0] + hr * 0.9 * Math.sin(th) * Math.cos(ph), hc[1] + hr * 1.1 * Math.cos(th), hc[2] + hr * 0.95 * Math.sin(th) * Math.sin(ph)];
+  };
+  for (let i = 0; i < LAT; i++) for (let j = 0; j < LON; j++) {
+    const q = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
+    both(i === 0 ? [q[0], q[1], q[2]] : i === LAT - 1 ? [q[0], q[1], q[3]] : q);
+  }
+  return out;
+}
+
+const HEAD_R = 0.068;
+
+/** The clay pass with every figure in it as a lit mannequin, for the two-pass still's stand-ins. */
+export function renderPeopleClay(shot: ShotSpec, space: SpaceSpec, figs: FigureSpec[]): Buffer {
+  const W = shot.width ?? 1536, H = shot.height ?? 1024;
+  const sink = new CanvasSink(W, H, false, space.openToSky ? "#9aa3ab" : "#fff");
+  const b = cameraBasis(shotCamera(shot, space, W, H));
+  const faces = collectFaces({ ...shot, figures: [] }, space);
+  figs.forEach((f) => faces.push(...figureFaces(f, `__fig_${f.id}`, 0.62)));
+  emitFaces(sink, faces, b, W, H, collectLights(space), true, collectShadowers(space));
+  return sink.png();
+}
+
+export interface FigureMask {
+  id: string;
+  /** white where this figure is visible from the camera, occluded by the room, props and the other figures */
+  png: Buffer;
+  /** visible share of the frame, and visible share of the figure's own unoccluded silhouette */
+  cover: number; seen: number;
+  /** visible bounding box, 0..1 [x0, y0, x1, y1], null when the figure is out of shot or fully hidden */
+  bbox: number[] | null;
+  /** head centre on screen, 0..1, null behind the camera; head radius as a share of frame height */
+  head: number[] | null;
+  headR: number | null;
+}
+
+/**
+ * One mask per figure for the two-pass still: the room is rendered with nobody in it, then each
+ * person is painted into their own mask only. Placement is then the geometry's, not the prompt's,
+ * and a body cannot be cloned or swap sides because there is nowhere else for it to go.
+ * `shot` must carry a frozen `camera` and no `framing` (resolveShot's passBoard).
+ */
+export function figureMasks(shot: ShotSpec, space: SpaceSpec, figs: FigureSpec[]): FigureMask[] {
+  const W = shot.width ?? 1536, H = shot.height ?? 1024;
+  const b = cameraBasis(shotCamera(shot, space, W, H));
+  const faces = collectFaces({ ...shot, figures: [] }, space);
+  figs.forEach((f) => faces.push(...figureFaces(f, `__fig_${f.id}`)));
+  const p = rasterise(faces, b, W, H);
+  const fpx = W / 2 / Math.tan((b.fov * Math.PI) / 360);
+  return figs.map((f) => {
+    const own = `__fig_${f.id}`;
+    const oi = p.owners.indexOf(own);
+    const alone = rasterise(figureFaces(f, own), b, W, H);
+    const px = new Uint8ClampedArray(W * H * 4);
+    let n = 0, whole = 0, x0 = W, y0 = H, x1 = -1, y1 = -1;
+    for (let i = 0; i < W * H; i++) {
+      px[i * 4 + 3] = 255;
+      if (alone.hit[i]) whole++;
+      if (oi > 0 && p.hit[i] && p.id[i] === oi) {
+        px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = 255;
+        n++;
+        const x = i % W, y = (i - x) / W;
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+    const hc = toCam(b, figureGeom(f).head.c);
+    const head = hc[2] >= NEAR ? [(W / 2 + (hc[0] * fpx) / hc[2]) / W, (H / 2 - (hc[1] * fpx) / hc[2]) / H] : null;
+    const headR = hc[2] >= NEAR ? (HEAD_R * (f.height ?? 1.7) * fpx) / hc[2] / H : null;
+    return {
+      id: f.id, png: bufferToPng(px, W, H), cover: n / (W * H), seen: whole ? n / whole : 0,
+      bbox: n ? [x0 / W, y0 / H, (x1 + 1) / W, (y1 + 1) / H] : null, head, headR,
+    };
+  });
 }
 
 /** Resolve a shot's camera: solved from `framing` when present, else the explicit `camera`. */

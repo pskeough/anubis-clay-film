@@ -50,10 +50,14 @@ def main() -> int:
           graphs.qwen_edit("t", ["a.png", "b.png"], steps=4, cfg=1.0, shift=1.0,
                            lightning=config.MODELS["qwen_lightning_4"]),
           ["LoraLoaderModelOnly"])
-    check("wan_i2v", graphs.wan_i2v("test", "plate.png"),
-          ["Wan22ImageToVideoLatent", "VHS_VideoCombine"])
-    check("wan_i2v core video", graphs.wan_i2v("t", "p.png", video_node="core"),
-          ["CreateVideo", "SaveVideo"])
+    # Wan's weights were deleted and config.py says its graphs should fail loudly.
+    if "wan_unet" in config.MODELS:
+        check("wan_i2v", graphs.wan_i2v("test", "plate.png"),
+              ["Wan22ImageToVideoLatent", "VHS_VideoCombine"])
+        check("wan_i2v core video", graphs.wan_i2v("t", "p.png", video_node="core"),
+              ["CreateVideo", "SaveVideo"])
+    else:
+        print("  wan_i2v                    skipped (no Wan weights in config.MODELS)")
 
     # The patch wraps block forwards, so sampling must already be applied or the
     # wrapper re-clones the model and drops the patch. This has bitten before.
@@ -75,7 +79,33 @@ def main() -> int:
     else:
         print("  qwen neg encoder           carries the same 2 images")
 
+    # Qwen-2.1 variants: base keeps its KSampler, turbo samples the saved 8-sigma
+    # schedule, and the edit's guider reads the cache node, not the bare UNET.
+    check("qwen21_t2i", graphs.qwen21_t2i("t"), ["KSampler"])
+    check("qwen21_t2i turbo", graphs.qwen21_t2i("t", variant="turbo"),
+          graphs.REQUIRED_NODES["qwen21_turbo"])
+    check("qwen21_edit turbo", graphs.qwen21_edit("t", ["a.png"], variant="turbo"),
+          graphs.REQUIRED_NODES["qwen21_turbo"] + ["QwenImage21Cache"])
+    check("qwen21_edit turbo_simple", graphs.qwen21_edit("t", ["a.png"], steps=18, variant="turbo_simple"),
+          ["KSampler"])
+    for variant, unet in [("base", "qwen21_unet"), ("turbo", "qwen21_turbo_unet"),
+                          ("turbo_simple", "qwen21_turbo_unet")]:
+        g = graphs.qwen21_edit("t", ["a.png"], steps=18, variant=variant)
+        names = [n["inputs"]["unet_name"] for n in g.values() if n["class_type"] == "UNETLoader"]
+        ks = [n["inputs"]["steps"] for n in g.values() if n["class_type"] == "KSampler"]
+        guide = [n for n in g.values() if n["class_type"] == "BasicGuider"]
+        if names != [config.MODELS[unet]]:
+            fails.append(f"QWEN21 {variant}: loads {names}")
+        if variant == "turbo_simple" and ks != [graphs.QWEN21_TURBO_STEPS]:
+            fails.append(f"QWEN21 turbo_simple: KSampler steps {ks}, expected 8")
+        if variant == "base" and ks != [18]:
+            fails.append(f"QWEN21 base: KSampler steps {ks}, expected 18")
+        if guide and g[guide[0]["inputs"]["model"][0]]["class_type"] != "QwenImage21Cache":
+            fails.append("QWEN21 turbo edit: BasicGuider does not read QwenImage21Cache")
+    print("  qwen21 variants            unet, steps and cache wiring")
+
     for label, fn in [
+        ("qwen21 bad variant", lambda: graphs.qwen21_t2i("t", variant="fast")),
         ("qwen ref cap", lambda: graphs.qwen_edit("t", ["a.png"] * 4)),
         ("wan 4n+1 guard", lambda: graphs.wan_i2v("t", "p.png", length=50)),
     ]:

@@ -38,6 +38,8 @@ $ErrorActionPreference = 'Stop'
 
 $FarmDir    = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Project    = Split-Path -Parent $FarmDir
+. (Join-Path $FarmDir 'envfile.ps1')
+Import-RepoEnv (Join-Path $Project '.env')   # the repo-root .env; the shell wins
 $StateDir   = Join-Path $FarmDir '_state'
 $ComfyRoot  = if ($env:COMFY_ROOT) { $env:COMFY_ROOT } else { 'C:\ComfyUI' }
 $ComfyPy    = Join-Path $ComfyRoot 'venv\Scripts\python.exe'
@@ -80,7 +82,7 @@ $BaseArgs = @(
   '--fast-disk'
 )
 
-$BootTimeoutSec = 240
+$BootTimeoutSec = 480   # big worker took >240 s to answer with 10 GB RAM free (2026-10-03)
 
 function Write-Line { param([string]$m) Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $m) }
 
@@ -148,9 +150,9 @@ function Start-Worker {
   }
 
   # Start-Process -ArgumentList joins the array with spaces, so every element
-  # holding a space has to carry its own quotes. This project lives under
-  # "C:\AI Coding Projects\...", which splits at "AI" otherwise and produces
-  # `main.py: error: unrecognized arguments: Coding Projects\...`.
+  # holding a space has to carry its own quotes. A project folder with a space
+  # in its name splits there otherwise and produces
+  # `main.py: error: unrecognized arguments: ...`.
   function Q { param([string]$s) return '"' + $s + '"' }
 
   $argList = @((Q $ComfyMain)) + $BaseArgs + @(
@@ -163,6 +165,14 @@ function Start-Worker {
   # the big worker adds --disable-pinned-memory; see $BigWorker above
   if ($W.PSObject.Properties.Name -contains 'Extra' -and $W.Extra) {
     $argList += $W.Extra
+  }
+  # FARM_EXTRA_ARGS (opt-in, 2026-10-15): extra ComfyUI flags for the pinned pair, e.g.
+  # "--disable-pinned-memory" for local H3, whose pinned host buffers count against system commit
+  # (ComfyUI issue 15337; one report: peak commit 60.2 -> 28.7 GB). Unset, nothing changes.
+  if ($env:FARM_EXTRA_ARGS) {
+    foreach ($x in ($env:FARM_EXTRA_ARGS -split '\s+')) {
+      if ($x -and -not ($argList -contains $x)) { $argList += $x }
+    }
   }
 
   # Blackwell allocator fragmentation produced spurious CUDA OOMs on this box;
@@ -232,6 +242,8 @@ function Invoke-Start {
   }
 
   $targets = $Workers
+  # `start gpu1`: one pinned worker only, so a card another job is using stays untouched.
+  if ($Worker -and -not $Big) { $targets = @($Workers | Where-Object { $_.Name -eq $Worker }) }
   if ($Big) {
     Write-Line 'starting the DUAL-CARD worker (both GPUs visible, pinned memory off)'
     $targets = @($BigWorker)

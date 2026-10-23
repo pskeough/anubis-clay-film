@@ -115,9 +115,13 @@ class Farm:
     def live_workers(self) -> list[dict]:
         alive = []
         for w in self.workers:
-            client = ComfyClient(w["port"])
+            client = ComfyClient(w["port"], host=w.get("host", "127.0.0.1"))
             if not client.reachable():
                 self._say(f"{w['name']}: not reachable on {w['port']}, skipping")
+                continue
+            if w.get("remote"):
+                # a rented pod (config.remote_workers): its card count is its own business
+                alive.append(w)
                 continue
             devs = client.devices()
             if len(devs) != 1:
@@ -212,6 +216,8 @@ class Farm:
         """
         if len(self.workers) < 2:
             return
+        if any(w.get("remote") for w in self.workers if w["name"] == name):
+            return  # a pod loads into its own RAM; this machine's free RAM says nothing about it
         self._load_lock.acquire()
         try:
             deadline = time.monotonic() + self.LOAD_WAIT_S
@@ -246,6 +252,8 @@ class Farm:
         already produced its output, and a permission error here would
         otherwise mark a good render as failed.
         """
+        if w.get("remote"):
+            return  # the pod's output folder is not on this disk
         try:
             base = C.FARM_STATE / w["name"] / "output"
             p = base / (out.subfolder or "") / out.filename
@@ -256,7 +264,8 @@ class Farm:
 
     def _worker_loop(self, w: dict, q: "queue.Queue[Job | None]",
                      results: list[Done]) -> None:
-        client = ComfyClient(w["port"], client_id=f"slop-farm-{w['name']}")
+        client = ComfyClient(w["port"], host=w.get("host", "127.0.0.1"),
+                             client_id=f"slop-farm-{w['name']}")
         uploaded: set[str] = set()
 
         while True:

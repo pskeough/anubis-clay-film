@@ -1,187 +1,125 @@
 # Scriptorium
 
-Scriptorium is a local pipeline that turns a written text into a narrated film. An LLM directs the text into a shot plan, an image model renders a still for each shot, a video model animates each still, the narration is recorded or synthesised, captions are timed to it, and the parts are assembled into one MP4. Every image, video, speech and caption model runs on the local machine.
+Scriptorium turns a piece of writing into a narrated film on your own machine. An LLM breaks the text into shots, Qwen-Image 2.1 paints a still for each one, MiniMax H3 animates the stills, you record the narration in the voice booth, and ffmpeg puts it together with captions. No image, video or speech model runs in the cloud.
 
-> **Early release.** This is the first public version. I will keep updating it and making it more user-friendly. Expect rough edges, Windows-specific scripts and paths tuned to one machine.
+Films made with it:
 
-The first film made with it is *Anubis*, a narrated short adapted from a 634-word prose piece: https://youtu.be/npvfbjC5cDI
+- *Anubis*: https://youtu.be/npvfbjC5cDI
+- *Deucalion*: https://youtu.be/BGRu-16W0GA
+- *Gardening*: https://youtu.be/b0LN-pbFJIU (42 minutes, with lip sync and a generated score from `finishing/`)
 
-## Pipeline
+It is a working tool built for one machine and opened up as it goes. Expect Windows scripts and some rough edges.
 
-```mermaid
-flowchart LR
-  T[written text<br/>or brief] --> P[plan<br/>LLM director writes plan.json]
-  P --> C[compile<br/>shots.json, beats.json]
-  C --> N[narrate<br/>Qwen3-TTS guide track]
-  C --> S0[staging, optional<br/>clay blockout and depth pass]
-  C --> S[stills<br/>Qwen-Image 2.1]
-  S0 --> S
-  S --> M[motion<br/>MiniMax H3 image-to-video<br/>+ cut check]
-  N --> A[assemble<br/>ffmpeg, MP4]
-  M --> A
-  A --> V[voice booth<br/>record narration, denoise,<br/>captions, final MP4]
-```
+## What you need
 
-The `run` command executes the stages in this order: `compile`, `narrate`, `clay`, `stills`, `motion`, `assemble`. Each stage reads what the one before wrote into the piece folder and records itself in `status.json`, so a run can stop at any point and resume with `--stages`.
+- Windows 11. The GPU farm is driven by PowerShell.
+- An NVIDIA card with 16 GB. It was built on two RTX 5060 Ti 16 GB cards and 32 GB of RAM.
+- About 60 GB of model weights, ComfyUI, Python 3.12+, Node 20+ and ffmpeg.
 
-### 1. Plan
+Stills fit on one 16 GB card. The H3 motion checkpoint is 21 GB: by default it runs on one worker that spans both cards. On a single card, set `CLAY_FILM_H3_SINGLE_GPU=1` and `FARM_EXTRA_ARGS=--disable-pinned-memory`, and give Windows a large page file, since the weights are offloaded to system memory. Rough speeds on the machine above: 35 s per still, 5 to 6 minutes per 5 s clip.
 
-A plan is a JSON file with a title, an optional `source` passage, a style, a cast, and a list of shots. Each shot carries the narration it speaks, what the still shows (`scene`, `subject`), what moves (`action`, `motion`) and how the camera is placed.
-
-`python -m clay_film plan` sends the text or a brief to any OpenAI-compatible chat endpoint (tested with Qwen3-14B on llama-server) together with the rulebook printed by `python -m clay_film guide`. Every answer is checked by `schema.validate`, and the errors go back to the model for up to three repairs. When a `source` passage is given, the narration must cover it verbatim, and the coverage check reports gaps. A plan can also be written by hand, or by an agent through the MCP server (`python -m clay_film.mcp_server`).
-
-### 2. Narrate
-
-Qwen3-TTS 1.7B (GGUF, run through the audio.cpp CLI) reads the narration and produces a guide track and `timeline.json`, which sets each shot's length. This track is a timing guide. The final voice usually comes from the voice booth.
-
-### 3. Stills
-
-Each shot gets one 1344x768 still from Qwen-Image 2.1. A shot has a mode:
-
-- `free`: text-to-image from the shot's `still_prompt`, with the plan's style clause and cast descriptions added. No staging step.
-- `clay`: the shot is staged first, then Qwen-Image 2.1 edits the staging image into a photograph.
-
-The clay blockout is one staging aid. `filmprep/` builds a metric 3D blockout of the location, places people at named marks, solves the camera, and writes a clay pass, a depth pass and a still prompt. It is useful when people must stand in specific places in a known set. Two example locations are included (`filmprep/locations/`). The stills graph takes up to ten reference images, so other staging inputs (a sketch, a photograph, an earlier still) can feed the same edit. `python -m clay_film shot NAME edit SID --prompt "..."` edits an existing still with an instruction.
-
-Stills run on two ComfyUI workers, one per GPU, on ports 8190 and 8191.
-
-### 4. Motion
-
-MiniMax H3 image-to-video animates each still into a clip whose length follows the narration. The graph is a copy of ComfyUI's shipped H3 template, run with the 8-step turbo LoRA at 6 steps and Sol-Attn block-sparse attention. It runs on a third ComfyUI worker on port 8192 that sees both GPUs, because the int8 checkpoint is 21 GB.
-
-After rendering, a frozen-clip gate reports clips in which nothing moved, and `clay_film/cutcheck.py` flags a clip whose largest frame-to-frame jump is over 12 and over 6 times its median, which is how an invented cut shows up.
-
-### 5. Assemble
-
-`pipeline_lib/assemble_film.py` lays the clips under the narration with ffmpeg and writes the film.
-
-### 6. Voice booth and captions
-
-`voice_booth/` is a local web app for recording a human narration against the assembled picture. It plays the silent picture, optionally with the TTS guide, and highlights the script as it goes. Each take is captured twice: an AudioWorklet copy gives the timing and a MediaRecorder copy gives the clean audio, and the two are aligned by cross-correlation. The build step lays the chosen takes, applies a spectral-gate denoise and loudness normalisation to -16 LUFS, and muxes the result with the picture.
-
-Captions use the script text. faster-whisper small.en provides word times only, and libass burns the captions in (Garamond Bold by default; the font folder is set by `CAPTION_FONTS_DIR`).
-
-## Hardware
-
-It was built and run on:
-
-- 2x NVIDIA RTX 5060 Ti 16 GB (no NVLink, PCIe 3.0 x8 each)
-- 32 GB DDR4
-- Windows 11
-
-Stills took about 35 s each per card. Motion took 5 to 6 minutes per 5 s clip. A 38-shot, 4.8-minute film took most of a night. The H3 stage needs a worker that can hold a 21 GB checkpoint across the available VRAM; on a single 16 GB card it will not load as configured.
-
-## Install
-
-Clone the repository, then hand setup to a coding agent:
+## Setup
 
 ```
 git clone https://github.com/pskeough/scriptorium.git
 cd scriptorium
+powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
-Open [`AGENT_SETUP.md`](AGENT_SETUP.md) and give the prompt in it to Claude Code or a similar coding agent running in the repository folder. The prompt has the agent check your GPU and VRAM, install the Python and Node dependencies, find or install ComfyUI and the custom nodes, place the model weights, fill in `.env`, run the self-test and report what is still missing.
+`setup.ps1` makes a `.venv`, installs torch and the Python requirements, runs `npm install` for the clay staging, writes a `.env` pointing at the venv, and runs the CPU self-test. It downloads no models.
 
-The manual steps are the same:
+ComfyUI, its custom nodes and the model weights come next. The easy way is to open a coding agent (Claude Code or similar) in the repo folder and give it the prompt in [AGENT_SETUP.md](AGENT_SETUP.md). It checks your cards, finds or installs ComfyUI, lists the weights with sizes and licences, waits for your go-ahead before downloading, and reports what is still missing. The same steps are written out there if you would rather do them by hand.
 
-1. Python 3.12 or later. Install torch for your CUDA version, then `pip install -r requirements.txt`.
-2. Node 20 or later, then `cd filmprep && npm install` (needed for clay staging only).
-3. ComfyUI, with ComfyUI-VideoHelperSuite for the video output node. Set `COMFY_ROOT`. The farm expects ComfyUI's Python at `COMFY_ROOT\venv\Scripts\python.exe`.
-4. The model weights listed under Models, placed in ComfyUI's model folders.
-5. For guide narration, the audio.cpp CLI and the Qwen3-TTS GGUF files. Set `AUDIOCPP_CLI`, `QWEN3TTS_BASE_GGUF` and `QWEN3TTS_VOICEDESIGN_GGUF`.
-6. Copy `.env.example` to `.env` and set any paths that differ from the defaults. The code reads these values from the process environment and does not load `.env` itself, so export them in your shell or set them as user environment variables.
+Settings live in `.env` at the repo root (copied from `.env.example`). Everything has a default. A variable set in your shell wins over the file.
 
-`python -m clay_film selftest` checks the schema, locations, cast, compile step and planner guide without a GPU. `python farm/preflight.py` checks ComfyUI, ports, GPUs, disk and model files before a render, and starts nothing.
-
-## Running
-
-The Python package is still named `clay_film`.
+## Making a film
 
 ```
-python -m clay_film guide --seconds 30
-python -m clay_film plan NAME --passage-file text.txt --seconds 30 --endpoint http://127.0.0.1:8080/v1 --model local
-python -m clay_film new NAME examples/example_plan.json
-python -m clay_film run NAME --stages compile,narrate,clay,stills
-python -m clay_film run NAME --stages motion
-python -m clay_film run NAME --stages assemble
-python -m clay_film cuts NAME
-python -m clay_film status NAME
-python -m clay_film shot NAME still|edit|motion|clay SID [--seed N] [--prompt "..."]
-python -m clay_film versions NAME
-python -m clay_film stop
+.venv\Scripts\activate
+python -m clay_film plan my_film --passage-file story.txt --endpoint http://127.0.0.1:8080/v1 --model local
+python -m clay_film run my_film --stages compile,narrate,clay,stills,endframes
+python -m clay_film run my_film --stages motion
+python -m clay_film run my_film --stages assemble
 ```
 
-Run motion and assemble as separate steps. The motion stage exits 1 when its frozen-clip gate fires, and locked-off shots trip that gate by design.
+Or start from the example: `python -m clay_film new my_film examples/example_plan.json`.
 
-`CLAY_FILM_DRY=1` fakes every GPU job, so the plan, compile, clay and assembly steps can be tested without models.
+The stages, in order:
 
-Other entry points:
+1. **plan**: any OpenAI-compatible chat model turns the text into `plan.json`, one entry per shot with its narration, what the still shows, what moves and where the camera is. Every answer is checked against the schema and sent back for repair. `python -m clay_film guide` prints the rules the model gets. You can also write or edit the plan by hand, in the studio, or through the MCP server.
+2. **compile**: shots and timing.
+3. **narrate**: a Qwen3-TTS guide track that sets each shot's length. Optional once you record your own voice.
+4. **clay**: for shots set in a known location, a 3D clay blockout places the people and solves the camera, so the still model gets the layout right.
+5. **stills**: Qwen-Image 2.1, one 1344x768 still per shot, from a prompt or as an edit of the clay pass.
+6. **endframes**: an optional last frame per shot, for moves that need to land somewhere.
+7. **motion**: MiniMax H3 animates each still. A check flags clips where nothing moved and clips where H3 cut to a new view mid-shot.
+8. **assemble**: the clips under the narration.
 
-- Studio: `python webui/server.py --open` (port 8761), or `ClayFilmStudio.bat`. Edits plans and runs stages per shot. `--dry` fakes GPU jobs.
-- Voice booth: `python voice_booth/server.py`, then open http://127.0.0.1:7090, or `voice_booth/VoiceBooth.bat`.
-- MCP server for agents: `python -m clay_film.mcp_server` (stdio).
-- Farm: `farm/farm.ps1 start`, `farm/farm.ps1 start -Big`, `farm/farm.ps1 stop`. The stages start and stop the farm themselves.
+Then record the narration in the voice booth (`python voice_booth/server.py`, http://127.0.0.1:7090). It plays the silent cut with the script, keeps each take, denoises and levels it, and builds captions from the script text with whisper word timing.
 
-## Layout
+Redo one shot with `python -m clay_film shot my_film still|edit|motion|clay s012 --seed 7`. Every version is kept: `versions` lists them and `activate` picks one. `status`, `cuts` and `stop` do what they say.
 
-| Path | Contents |
-|---|---|
-| `clay_film/` | Plan schema and validation, LLM planner, stage runner, per-shot versions, cut detector, MCP server. |
-| `farm/` | ComfyUI worker farm: start and stop, job dispatch, graph builders for each model, preflight. |
-| `pipeline_lib/` | Narration, motion and assembly scripts called by the stages. |
-| `tts_engine/` | Text preparation and the Kokoro narration engine used by narration and assembly. |
-| `voice_booth/` | Voice Booth web app and caption builder. |
-| `webui/` | The studio, a FastAPI web UI. |
-| `filmprep/` | TypeScript clay staging: camera solve, clay and depth passes, still prompts, two example locations, an example story bible. |
-| `marks/` | Tested standing positions per location. |
-| `examples/` | An example plan. |
+Other ways in:
 
-## Writing shots
+- Studio web UI: `python webui/server.py --open` (port 8761). Edit the plan and run stages per shot.
+- MCP server for agents: `python -m clay_film.mcp_server`.
+- Director mode for longer adaptations: `python -m clay_film direct check|continuity|board|compile|animatic NAME`.
+- `CLAY_FILM_DRY=1` fakes every GPU job, for testing without models.
 
-`python -m clay_film guide` prints the full rule set the planner model receives. These rules came from the *Anubis* render:
+## Finishing
 
-- A shot's `scene` and `subject` describe only what its still shows. H3 invents a cut to anything named that the still does not contain.
-- An `action` must be visible at the still's own scale. Hand-level business on a small full-length figure produces a cut to a close-up.
+`finishing/` holds three standalone tools used on *Gardening*:
+
+- `retime.py` fits a clip to its narration with RIFE in-betweens, dissolves in from the previous shot, fades to black.
+- `score.py` generates a score with Stable Audio 3, one movement per section of the story, and mixes it under the voice with ducking.
+- `lipsync.py` lip-syncs dialogue with LatentSync, finding the speaker by face recognition so the right mouth moves in a shot with several people.
+
+Each needs its own extra install. See [finishing/README.md](finishing/README.md).
+
+## Writing shots that H3 can animate
+
+These came from the films above. `python -m clay_film guide` has the full set.
+
+- Describe only what the still shows. H3 invents a cut to anything the text names that the frame does not contain.
+- Keep actions at the scale of the frame. Hand business on a small full-length figure produces a cut to a close-up.
+- Use a slight push-in and hold. Pans, travelling shots and pull-backs make H3 invent the rest of the room.
+- Fill the shot with movement. A beat with nothing to do comes out frozen, and pinning a shot to an end frame tends to give a slow morph between two pictures.
 - H3 renders "X fades" as X appearing. Write the appearance and reverse the clip.
 
 ## Models
 
-These are the models used for the films made with this pipeline. Every one can be swapped: the planner is any OpenAI-compatible chat model, and the ComfyUI stages take other checkpoints if you change the file names in `farm/config.py` and the defaults in `farm/graphs.py`.
+No weights are included. These are the ones the films used; each one can be swapped by changing the names in `farm/config.py` and `farm/graphs.py`.
 
-| Role | Model | File | Link | Licence (from the model card) |
-|---|---|---|---|---|
-| Planner (director) | Qwen3.8-27B, run as a Q4_K_M GGUF on llama-server; any OpenAI-compatible chat model works | any Q4_K_M GGUF of the model | [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) | Apache 2.0 |
-| Planner, tested default | Qwen3-14B on llama-server | any Qwen3-14B GGUF | [Qwen/Qwen3-14B-GGUF](https://huggingface.co/Qwen/Qwen3-14B-GGUF) | Apache 2.0 |
-| Stills: diffusion model | Qwen-Image 2.1, int8 ConvRot (ComfyUI repack) | `qwen_image_2.1_int8_convrot.safetensors` | [Comfy-Org/Qwen-Image-2.1](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/diffusion_models/qwen_image_2.1_int8_convrot.safetensors) | Qwen Research licence ([LICENSE](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE)) |
-| Stills: text encoder | Qwen3-VL 8B, w4a8 | `qwen3vl_8b_w4a8.safetensors` | [Comfy-Org/Qwen-Image-2.1](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/text_encoders/qwen3vl_8b_w4a8.safetensors) | Qwen Research licence |
-| Stills: VAE | Qwen-Image 2.1 VAE | `qwen_image_2.1_vae_bf16.safetensors` | [Comfy-Org/Qwen-Image-2.1](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/vae/qwen_image_2.1_vae_bf16.safetensors) | Qwen Research licence |
-| Motion: diffusion model | MiniMax H3 first/last-frame-to-video, pruned int8 ConvRot (ComfyUI repack) | `minimax_h3_fl2va_pruned_int8_convrot.safetensors` | [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors) | MiniMax H3 Community License Agreement ([LICENSE](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE)) |
-| Motion: text encoder | Qwen3-VL 32B for H3, NVFP4 (AWQ) | `qwen3vl32b_h3_nvfp4.safetensors` (published as `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`; rename after download) | [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors) | MiniMax H3 Community License Agreement |
-| Motion: VAE | MiniMax H3 video VAE | `minimax_h3_video_vae_fp16.safetensors` | [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/vae/minimax_h3_video_vae_fp16.safetensors) | MiniMax H3 Community License Agreement |
-| Motion: LoRA | MiniMax H3 FL2V turbo, 8 steps | `minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` | [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors) | MiniMax H3 Community License Agreement |
-| Guide narration | Qwen3-TTS 1.7B, base and VoiceDesign, GGUF via audio.cpp | `qwen3-tts-12hz-1.7b-base-q8_0.gguf`, `qwen3-tts-voicedesign-q8_0.gguf` | source not recorded | Check the Qwen3-TTS model card. |
-| Narration engine (optional) | Kokoro-82M | downloaded by the `kokoro` package | | Apache 2.0 |
-| Caption timing | faster-whisper small.en | downloaded by `faster-whisper` | | MIT |
+| Role | Model | Licence |
+|---|---|---|
+| Planner | Qwen3.8-27B (Q4_K_M) or Qwen3-14B on llama-server; any OpenAI-compatible model | Apache 2.0 |
+| Stills | [Qwen-Image 2.1](https://huggingface.co/Comfy-Org/Qwen-Image-2.1): int8 ConvRot model, Qwen3-VL 8B encoder, VAE | Qwen Research |
+| Motion | [MiniMax H3](https://huggingface.co/Comfy-Org/MiniMax-H3): FL2V int8 ConvRot, Qwen3-VL 32B NVFP4 encoder, video VAE, 8-step turbo LoRA | MiniMax H3 Community |
+| Guide narration | Qwen3-TTS 1.7B GGUF via audio.cpp | see the model card |
+| Captions | faster-whisper small.en | MIT |
+| Finishing | Stable Audio 3 Medium, LatentSync 1.5/1.6, RIFE 4.26 | see each model card |
 
-The planner is chosen on the command line: `python -m clay_film plan NAME --endpoint URL --model ID`. The defaults are `http://127.0.0.1:8080/v1` and `local`, which is whatever llama-server has loaded. The author runs the 27B above. It needs about 17 GB for weights and was run split across two 16 GB cards. Qwen3-14B is the model the planner was tested with, and it fits one card.
+Exact file names and sizes are in [AGENT_SETUP.md](AGENT_SETUP.md).
 
-`farm/config.py` also lists Z-Image and Qwen-Image-Edit-2509 files used by older graphs. The current stages do not use them, but `farm/preflight.py` checks every entry in `MODELS` and reports the absent ones.
+## Layout
 
-No weights are included in this repository.
+| Folder | What is in it |
+|---|---|
+| `clay_film/` | the CLI, plan schema, planner, stage runner, versions, cut check, director mode, MCP server |
+| `farm/` | ComfyUI workers (one per card), job dispatch, graphs, preflight |
+| `pipeline_lib/` | narration, motion and assembly steps |
+| `filmprep/` | TypeScript clay staging, two example locations |
+| `voice_booth/` | recording app, take editor, captions |
+| `webui/` | the studio |
+| `finishing/` | retime, score, lip sync |
+| `tts_engine/`, `marks/`, `examples/`, `tests/` | narration engine, standing marks per location, an example plan, tests |
 
-## Not included
+## Limits
 
-- Model weights, ComfyUI and generated media.
-- The *Anubis* source text and plan, and the narrator reference recording.
-- The full location set and story bible of the project the clay locations came from.
-
-## Known limits
-
-- The farm scripts (`farm.ps1`, `phase.ps1`) are PowerShell and assume Windows.
-- Ports, VRAM floors and worker layout in `farm/config.py` are set for two 16 GB cards.
-- In clay mode, `facing` handles far and near only, and close framing is not reliably honoured by the still model.
-- Multi-location plans compile but have not been rendered end to end.
+- The farm scripts assume Windows and are tuned for two 16 GB cards.
+- Clay staging covers far and near framing well; very close framing is not reliably held by the still model.
+- The two example locations are small. Your own sets go in `filmprep/locations/`.
 
 ## Licence
 
-MIT. See `LICENSE`. Model weights carry their own licences.
+MIT, see `LICENSE`. Model weights carry their own licences.

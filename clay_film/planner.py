@@ -408,7 +408,7 @@ def plan(endpoint: str, model: str, *, brief: str | None = None, passage: str | 
 # -- revising what is already there (the studio's chat boxes) ---------------------------------
 
 # Fields a model never writes: the studio's own bookkeeping and hand overrides.
-KEEP_FIELDS = ("id", "still_prompt", "motion_prompt", "tail_s")
+KEEP_FIELDS = ("id", "still_prompt", "motion_prompt", "tail_s", "video_path", "music", "end_crop")
 
 
 def _shot_errs(errs: list[str], i: int) -> list[str]:

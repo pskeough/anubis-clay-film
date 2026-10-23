@@ -21,7 +21,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOUSE_STYLE, ANATOMY_GUARD, EMPTY_SCENE, lintBackgroundPrompt, PERSON_NOUN_RX } from "./prompts.js";
 
-// fileURLToPath, NOT new URL().pathname: the latter percent-encodes the space in "AI Coding Projects"
+// fileURLToPath, NOT new URL().pathname: the latter percent-encodes a space in the folder path
 // and silently yields a directory that does not exist, so listLocationIds() returned [] and the canon
 // enum was empty — which read as the model refusing to pick canon locations.
 const LOCATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "locations");
