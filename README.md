@@ -6,7 +6,7 @@ Films made with it:
 
 - *Anubis*: https://youtu.be/npvfbjC5cDI
 - *Deucalion*: https://youtu.be/BGRu-16W0GA
-- *Gardening*: https://youtu.be/b0LN-pbFJIU (42 minutes, with lip sync and a generated score from `finishing/`)
+- *Gardening*: https://youtu.be/celER261eds (42 minutes, with lip sync and a generated score from `finishing/`)
 
 It is a working tool built for one machine and opened up as it goes. Expect Windows scripts and some rough edges.
 
